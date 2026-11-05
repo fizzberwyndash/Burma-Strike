@@ -8,6 +8,8 @@ export interface InputCallbacks {
   onInspect?: () => void;
   onAds?: (active: boolean) => void;
   onShop?: () => void;
+  onInteract?: (held: boolean) => void;
+  onScoreboard?: (held: boolean) => void;
 }
 
 /** Owns desktop events; touch UI feeds its independent pointers into this class. */
@@ -18,10 +20,11 @@ export class GameInput {
   public invertY = false;
   public fireHeld = false;
   public adsHeld = false;
+  public interactHeld = false;
+  public scoreboardHeld = false;
   public sprinting = false;
   /** Shop hotkeys remain available while gameplay input is suspended by its overlay. */
   public shopEnabled = false;
-  public shopOpen = false;
   public lookX = 0;
   public lookY = 0;
   public moveX = 0;
@@ -36,6 +39,7 @@ export class GameInput {
   private joystickX = 0;
   private joystickY = 0;
   private touchSprinting = false;
+  private shopVisible = false;
 
   public constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -66,6 +70,15 @@ export class GameInput {
     if (!value) this.clearState();
   }
 
+  public get shopOpen(): boolean {
+    return this.shopVisible;
+  }
+
+  public set shopOpen(value: boolean) {
+    this.shopVisible = value;
+    if (value) this.clearState();
+  }
+
   public touchMove(x: number, y: number): void {
     if (!this.active) return;
     this.joystickX = Number.isFinite(x) ? Math.max(-1, Math.min(1, x)) : 0;
@@ -90,6 +103,17 @@ export class GameInput {
     this.setAds(held);
   }
 
+  /** Release remains valid after an overlay disables gameplay input. */
+  public touchInteract(held: boolean): void {
+    if (held && (!this.active || this.shopOpen)) return;
+    this.setInteract(held);
+  }
+
+  public touchScoreboard(held: boolean): void {
+    if (held && (!this.active || this.shopOpen)) return;
+    this.setScoreboard(held);
+  }
+
   public touchSprint(held: boolean): void {
     this.touchSprinting = this.active && held;
     this.sprinting = this.touchSprinting || this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
@@ -99,6 +123,18 @@ export class GameInput {
     if (this.adsHeld === held) return;
     this.adsHeld = held;
     this.callbacks.onAds?.(held);
+  }
+
+  private setInteract(held: boolean): void {
+    if (this.interactHeld === held) return;
+    this.interactHeld = held;
+    this.callbacks.onInteract?.(held);
+  }
+
+  private setScoreboard(held: boolean): void {
+    if (this.scoreboardHeld === held) return;
+    this.scoreboardHeld = held;
+    this.callbacks.onScoreboard?.(held);
   }
 
   private accumulateLook(dx: number, dy: number, scale: number): void {
@@ -172,6 +208,8 @@ export class GameInput {
     this.keys.clear();
     this.fireHeld = false;
     this.setAds(false);
+    this.setInteract(false);
+    this.setScoreboard(false);
     this.sprinting = false;
     this.touchSprinting = false;
     this.moveX = 0;
@@ -197,7 +235,8 @@ export class GameInput {
       return;
     }
     if (!this.active) return;
-    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'KeyR', 'Escape', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'KeyB', 'KeyN', 'KeyF', 'ShiftLeft', 'ShiftRight'].includes(code)) {
+    if (this.shopOpen && (code === 'KeyF' || code === 'Tab')) return;
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'KeyR', 'Escape', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'KeyB', 'KeyN', 'KeyF', 'KeyV', 'Tab', 'ShiftLeft', 'ShiftRight'].includes(code)) {
       event.preventDefault();
     }
     if (code === 'Escape') {
@@ -211,11 +250,15 @@ export class GameInput {
     if (code === 'Space') this.callbacks.onJump();
     if (/^Digit[1-4]$/.test(code)) this.callbacks.onSlot?.(Number(code.slice(-1)));
     if (code === 'KeyN') this.callbacks.onPrimaryCycle?.();
-    if (code === 'KeyF') this.callbacks.onInspect?.();
+    if (code === 'KeyV') this.callbacks.onInspect?.();
+    if (code === 'KeyF') this.setInteract(true);
+    if (code === 'Tab') this.setScoreboard(true);
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
     this.keys.delete(event.code);
+    if (event.code === 'KeyF') this.setInteract(false);
+    if (event.code === 'Tab') this.setScoreboard(false);
   };
 
   private readonly onMouseMove = (event: MouseEvent): void => {

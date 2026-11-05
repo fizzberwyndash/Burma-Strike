@@ -38,7 +38,10 @@ Open the address printed by Vite (normally port 4173 for preview).
 | Cycle owned Practice primary | N |
 | Aim down sights | Hold right mouse button |
 | Sprint forward | Hold Shift + W |
-| Inspect weapon | F |
+| Inspect weapon | V |
+| Equip Royal Signal Core | 4 (designated carrier) |
+| Plant / defuse / recover | Hold F when eligible |
+| Scoreboard | Hold Tab |
 
 Practice has three 100-HP dummies. Body hits deal 34 damage; headshots deal 100. Dummies respawn after three seconds. Walls, gates, and crates stop bullets and player movement. The SHWE-9 pistol starts with a 12-round magazine and 48 reserve rounds. Reload takes 1.6 seconds. Use **Esc → Reset Range & Resupply** to restore ammunition and scores. In Free Range, health stays at 100 because targets do not attack. Economy Drill provides a real HP/armor damage path through its explicitly labeled local test controls.
 
@@ -73,7 +76,7 @@ npm run build
 
 Tests cover ammo conservation, action exclusivity, per-weapon cooldowns, loadout/resupply behavior, settings migration/boundaries, pixel-based aim scaling, touch independence, held-input release and listener cleanup. Browser integration was additionally checked with Chromium and emulated landscape touch input. Physical phones, Safari/Firefox, controller input and calibrated cross-game sensitivity were not tested.
 
-Manual smoke test: launch Practice; switch 1/2/3; cycle N; hold rifle fire; reload and try firing/switching before completion; hold RMB for ADS; choose sniper and verify scope; inspect with F; knife a nearby dummy; fire into a wall/crate and sand; sprint/jump into cover; pause/resume; change/reset settings and refresh. On mobile, combine joystick + drag aiming + held Fire/ADS, release/cancel touches, switch slots, reload, and rotate the device. Confirm no input remains stuck.
+Manual smoke test: launch Practice; switch 1/2/3; cycle N; hold rifle fire; reload and try firing/switching before completion; hold RMB for ADS; choose sniper and verify scope; inspect with V; knife a nearby dummy; fire into a wall/crate and sand; sprint/jump into cover; pause/resume; change/reset settings and refresh. On mobile, combine joystick + drag aiming + held Fire/ADS, release/cancel touches, switch slots, reload, and rotate the device. Confirm no input remains stuck.
 
 
 ## Buy shop, armor and local economy
@@ -140,3 +143,50 @@ For a phone on the same network as your development computer, use that computer'
 Unmounting disposes the engine, scene, meshes, materials, textures, audio context, render loop, and input listeners. Gameplay pauses on focus loss; live processes do not need a backend service.
 
 The purchase phase adds `src/game/catalog.ts` (shop metadata), `src/game/economy.ts` (central validated Practice authority), `src/components/BuyMenu.tsx` and `WeaponPreview.tsx` (responsive shop), and `tests/economy.test.mjs`. Existing game/input/inventory/HUD modules integrate those systems; weapon models and the fortress remain unchanged.
+
+
+## Royal Signal Core — tactical plant / defuse sandbox
+
+Choose **Royal Signal Core** from the main menu. Free Range and Economy Drill remain separate working modes. This new mode is an **offline objective sandbox**, with locally controlled Attackers and Defenders. Other roles are shootable procedural stand-ins, not AI opponents or network players. Pause with Esc to open **Local Objective Sandbox** controls: select a role, travel to A/B for testing, take damage, disconnect a role, or configure the local host's 1v1 / 2v1 format and active site (A only, B only, or both). Applying host configuration resets the match.
+
+| Stage | Duration / behavior |
+| --- | --- |
+| Buy | 20 seconds, automatically enters combat |
+| Combat | 100 seconds before planting |
+| Plant | 4 uninterrupted seconds |
+| Planted core | 35-second countdown |
+| Defuse | 6 uninterrupted seconds |
+| Result | Victory banner, score and Next Round / Rematch buttons |
+| Transition | 1 second; objective interactions are disabled |
+
+**Controls:** 4 equips the carried device; hold F to plant, defuse or recover a dropped core when eligible. B opens the existing buy shop. Hold Tab for the scoreboard. Weapon inspection moved from F to **V**. Existing 1/2/3 switching, WASD, mouse aiming, fire/reload/jump and mobile controls still work. Mobile adds core equip, a captured hold-to-interact button with a progress circle, and a scoreboard button.
+
+Only the living, connected designated Attacker carrier can plant, and only inside an enabled site with the core equipped. The original site centers are A **(-19, 4.5)** and B **(18, 12)** in fortress XZ coordinates. A carrier lost before planting drops the core; another living Attacker within reach can recover it with F, becoming the new designated carrier, then equip4 and start a fresh hold. Defenders can only defuse a planted core within 2.2 meters.
+
+Release, movement beyond the 0.15-meter stationary allowance, leaving interaction range, damage (including armor-absorbed hits), death, disconnection or holstering cancels the hold. Progress does not resume after cancellation. Opening the shop or pausing also clears held input. Combat timeout wins for Defenders; countdown expiry wins for Attackers; a completed defuse wins for Defenders. Pre-plant team elimination wins for the surviving team. After planting, killing/disconnecting all Attackers does **not** end the countdown or remove the need to defuse. If all Defenders are eliminated after planting, Attackers win. At an exact deadline tie, countdown expiry takes priority over interaction completion.
+
+### Try both sides in one browser
+
+1. Enter Royal Signal Core. Buy equipment during the automatic 20-second buy phase; there is no manual early-start button in this mode.
+2. Close the shop, pause with Esc, choose Attacker 1 and **Travel A**, then resume. Wait for combat, equip4, and hold F. Release early to test cancellation, then complete a fresh four-second hold.
+3. Pause and choose Defender 1. **Travel A** places you near the planted core without overlapping the Attacker stand-in. Resume and hold F for six seconds to defuse. You can walk there normally instead of using the explicit sandbox travel helper.
+4. Test damage or disconnection from the pause panel, fire purchased weapons at opposing stand-ins, or let the countdown expire. The minimap shows active sites, your location and the carried/dropped/planted core. The original 3D core has placement/arming/defuse animation, pulsing light and increasingly frequent countdown beeps.
+5. Next Round preserves credits, owned gear and remaining armor, restores HP/ammunition, and starts another timed buy. Rematch resets scores and every local account to 800 credits with its knife. Next Round retains disconnected slots; Rematch explicitly reconnects them. Role inventories/accounts are independent.
+
+Local pause/focus loss freezes this offline sandbox's clock. The shop does not pause it. A production online round must use the server clock continuously even when one client pauses or disconnects. The final result releases pointer lock so its buttons work; use Next Round or Rematch to continue.
+
+### Rule authority and online boundary
+
+`objective.ts` contains a deterministic, rendering-independent round state machine. `ObjectiveSession` is its **local trusted adapter** for collision-resolved positions, armor-aware damage, per-role inventories, economy phase changes and one-time payouts. `ObjectiveView` consumes snapshots only and cannot declare a plant, defuse or win. HUD progress is read from authority snapshots; it is never sent back as completion.
+
+Interaction commands contain an ID, displayed round, monotonic epoch and intent (`interact-start` / `interact-stop`). There is no client `plant-complete`, `defuse-complete`, time-advance or victory command. The authority checks role, carrier, equipment, site/range, alive/connected state and uninterrupted hold, then owns completion and round resolution. IDs are deduplicated with fingerprints, stale epochs/rounds are rejected, and ledgers are bounded without evicting replay protection. NextRound/Rematch require host context supplied by the adapter. Damage and disconnect methods take trusted authoritative observations, never raw client declarations.
+
+**No online multiplayer transport or authoritative server is present in this repository.** Future online code must run the rules, clock, collision validation, damage and reward adapter on the authenticated server; derive actor/host identity from the connection; validate round/epoch on delayed observations; and broadcast read-only snapshots. Never expose the local role-switch, travel, damage or simulated economy controls as authoritative network actions. Local browser owners can ultimately alter their offline runtime; these safeguards do not claim to prevent offline cheating.
+
+### Objective verification
+
+`npm test` now includes 24 objective-rule tests plus adapter tests and all previous gameplay/economy/input tests. They cover plant and cancellation paths, defuse and cancellation, deadline ties/large clock steps, timeout/countdown, pre/postplant elimination, carrier recovery, disconnects, frozen snapshots, stale/duplicate/malformed intents, unauthorized host commands, rematch/transition, duplicate trusted events, bounded ledgers, and armor/economy payout integration. A getter-backed position regression exercises Babylon-like vectors through plant/defuse.
+
+Desktop Chromium and emulated mobile were additionally checked through the actual UI and game with natural buy/plant/defuse timings. Real network disconnection, latency/reordering over an actual transport, real phones, other browser engines and audible sound quality were not tested. Rule-level message/disconnect cases were tested without claiming a working multiplayer connection.
+
+New modules: `src/game/objective.ts`, `objectiveSession.ts`, `objectiveView.ts`, `src/components/ObjectiveHud.tsx`, and `tests/objective*.test.mjs`. Existing game, shop, economy, HUD and input integrate the mode while retaining the earlier Free Range and Economy Drill workflows.

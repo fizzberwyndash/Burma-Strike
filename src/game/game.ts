@@ -18,6 +18,10 @@ import { DEFAULT_SETTINGS, normalizeSettings } from './settings';
 import type { GameSettings } from './settings';
 import { PracticeEconomy } from './economy';
 import type { EconomyCommand, EconomySnapshot } from './economy';
+import { ObjectiveSession } from './objectiveSession';
+import { OBJECTIVE_SITES } from './objective';
+import type { ObjectiveConfig, ObjectiveSnapshot, ObjectiveCommand } from './objective';
+import { ObjectiveView } from './objectiveView';
 export type { GameSettings } from './settings';
 
 export type GameMode = 'menu' | 'playing' | 'paused';
@@ -30,6 +34,9 @@ export interface HudState {
   armor: number; armorType: 'light-armor' | 'heavy-armor' | null;
   credits: number; economyMode: boolean; phase: 'buy' | 'live' | 'ended'; round: number;
   economy: EconomySnapshot | null;
+  objective: ObjectiveSnapshot | null; controlledId: string; objectiveEquipped: boolean;
+  interactHeld: boolean; scoreboard: boolean; canInteract: boolean; interactLabel: string;
+  playerPosition: {x:number;y:number;z:number};
 }
 export const INITIAL_HUD: HudState = {
   ammo: 12, reserve: 48, health: 100, kills: 0, shots: 0, hits: 0,
@@ -37,6 +44,8 @@ export const INITIAL_HUD: HudState = {
   weaponId: 'pistol', weaponName: 'SHWE-9', weaponKind: 'pistol', slot: 2,
   primaryId: 'rifle', action: 'ready', ads: false, sprinting: false,
   armor: 0, armorType: null, credits: 800, economyMode: false, phase: 'buy', round: 1, economy: null,
+  objective: null, controlledId: 'attacker-1', objectiveEquipped: false, interactHeld: false,
+  scoreboard:false, canInteract:false, interactLabel:'', playerPosition:{x:0,y:1,z:-12},
 };
 
 /** Owns the existing Practice scene. Input, inventory and presentation have separate lifetimes. */
@@ -44,7 +53,7 @@ export class StrikeGame {
   readonly engine: Engine;
   readonly scene: Scene;
   readonly input: GameInput;
-  readonly inventory = new WeaponInventory();
+  inventory = new WeaponInventory();
   private camera: FreeCamera;
   private player: Mesh;
   private map: ReturnType<typeof buildMap>;
@@ -67,6 +76,12 @@ export class StrikeGame {
   private disposed = false;
   private economy: PracticeEconomy | null = null;
   private shopOpen = false;
+  private objectiveSession: ObjectiveSession | null = null;
+  private objectiveView: ObjectiveView;
+  private controlledId = 'attacker-1';
+  private deviceEquipped = false;
+  private objectiveSequence = 0;
+  private objectivePhaseKey = '';
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -94,11 +109,13 @@ export class StrikeGame {
     this.weapon.equip(this.inventory.definition);
     this.weapon.setVisible(false);
     this.effects = new ShotEffects(this.scene);
+    this.objectiveView = new ObjectiveView(this.scene, this.camera);
     this.input = new GameInput(canvas, {
       onPause, onShoot: () => this.shoot(), onReload: () => this.reload(), onJump: () => this.jump(),
       onSlot: slot => this.equipSlot(slot), onPrimaryCycle: () => this.cyclePrimary(),
       onInspect: () => this.inspect(), onAds: active => this.setAds(active),
       onShop: () => this.shopOpen ? this.closeShop() : this.openShop(),
+      onInteract: held => this.interact(held), onScoreboard: held => this.showScoreboard(held),
     });
     this.configure(settings);
     this.camera.fov = this.settings.fov * Math.PI / 180;
@@ -119,9 +136,9 @@ export class StrikeGame {
   setMode(mode: GameMode) {
     const previous = this.mode;
     this.mode = mode;
-    this.input.shopEnabled = mode === 'playing';
-    this.input.active = mode === 'playing' && !this.shopOpen;
-    this.weapon.setVisible(mode !== 'menu');
+    this.input.shopEnabled = mode === 'playing' && this.objectivePhaseAllowsInput();
+    this.input.active = mode === 'playing' && !this.shopOpen && this.objectivePhaseAllowsInput();
+    this.weapon.setVisible(mode !== 'menu' && !this.deviceEquipped);
     if (mode === 'playing') {
       if (previous === 'menu') { this.resetPosition(); this.inventory.draw(); this.updateCamera(); }
       if (!this.shopOpen) this.input.requestPointerLock();
@@ -142,6 +159,7 @@ export class StrikeGame {
   }
 
   restart() {
+    if (this.objectiveSession) { this.rematchObjective(); return; }
     // Free Range retains its original reset. Economy resets are explicit fresh drills,
     // rather than a way to grant purchased equipment or bypass phase validation.
     if (this.economy) { this.startEconomyDrill(); return; }
@@ -158,6 +176,20 @@ export class StrikeGame {
 
   equipSlot(slot: number) {
     if (this.mode === 'menu' || this.economy?.snapshot.phase === 'ended') return;
+    if (slot === 4) {
+      if (!this.objectiveSession || this.inventory.busy) return;
+      if (this.objectiveSession.authority.equipCore(this.controlledId, true)) {
+        this.deviceEquipped = true; this.input.fireHeld = false; this.input.touchAds(false);
+        this.weapon.setVisible(false); this.emitHud();
+      }
+      return;
+    }
+    const targetId = slot === 1 ? this.inventory.primaryId : slot === 2 ? 'pistol' : slot === 3 ? 'knife' : null;
+    if (!targetId || !this.inventory.owns(targetId)) return;
+    if (this.deviceEquipped) {
+      this.holsterCore();
+      if (this.inventory.activeId === targetId) { this.inventory.draw(); this.emitHud(); return; }
+    }
     if (this.inventory.equipSlot(slot)) {
       const id = slot === 1 ? this.inventory.primaryId : slot === 2 ? 'pistol' : 'knife';
       this.economy?.execute({type:'equip', weaponId:id});
@@ -167,6 +199,8 @@ export class StrikeGame {
   selectPrimary(id: 'rifle' | 'smg' | 'sniper') {
     if (!['rifle', 'smg', 'sniper'].includes(id)) return;
     if (this.economy && this.inventory.busy) return;
+    if (!this.inventory.owns(id)) return;
+    this.holsterCore();
     // A paused loadout picker may replace its choice repeatedly without advancing the world.
     if (this.mode === 'paused' && !this.economy) { this.inventory.update(10); this.inventory.update(10); }
     if (this.inventory.selectPrimary(id)) {
@@ -186,6 +220,7 @@ export class StrikeGame {
 
   /** Unrestricted arsenal from previous phases, independent of the economy drill. */
   startFreePractice() {
+    this.clearObjective();
     this.economy = null;
     this.shopOpen = false; this.input.shopOpen = false; this.onShop(false);
     this.inventory.setOwnership(null);
@@ -193,6 +228,7 @@ export class StrikeGame {
   }
 
   startEconomyDrill() {
+    this.clearObjective();
     this.economy = new PracticeEconomy();
     this.state = {...INITIAL_HUD};
     this.inventory.reset();
@@ -214,7 +250,7 @@ export class StrikeGame {
 
   closeShop() {
     this.shopOpen = false; this.input.shopOpen = false;
-    this.input.active = this.mode === 'playing';
+    this.input.active = this.mode === 'playing' && this.objectivePhaseAllowsInput();
     this.onShop(false);
     if (this.input.active) this.input.requestPointerLock();
     this.emitHud();
@@ -223,6 +259,7 @@ export class StrikeGame {
   private syncEconomyEquipment(refill = false) {
     if (!this.economy) return;
     const snapshot = this.economy.snapshot;
+    this.holsterCore();
     // Settle any existing transition before a validated shop command auto-equips.
     if (snapshot.phase === 'buy') { this.inventory.update(10); this.inventory.update(10); }
     if (refill) this.inventory.reset();
@@ -253,23 +290,175 @@ export class StrikeGame {
   }
 
   startRound() {
+    if (this.objectiveSession) return; // Objective buy phase is timed by its authority.
     if (this.economyCommand({type:'start-round'})?.ok) {
       this.resetPosition(); this.updateCamera(); this.closeShop();
     }
   }
   finishRound(outcome: 'win' | 'loss') {
+    if (this.objectiveSession) return;
     if (this.economyCommand({type:'finish-round', outcome})?.ok) this.openShop();
   }
   newRound() {
+    if (this.objectiveSession) { this.nextObjectiveRound(); return; }
     if (!this.economyCommand({type:'new-round'})?.ok) return;
     this.syncEconomyEquipment(true);
     this.resetPosition(); this.resetTargets(); this.updateCamera(); this.openShop();
   }
   /** A real damage path for the explicitly labeled local drill controls. */
   testDamage(amount = 40) {
+    if (this.objectiveSession) { this.objectiveTestDamage(amount); return; }
     const result = this.economyCommand({type:'damage', amount});
     if (result?.ok && this.economy?.snapshot.phase === 'ended') this.openShop();
     return result;
+  }
+
+  private objectivePhaseAllowsInput() {
+    const phase = this.objectiveSession?.snapshot.phase;
+    return phase !== 'result' && phase !== 'transition';
+  }
+  private clearObjective() {
+    this.interact(false);
+    this.objectiveSession = null; this.deviceEquipped = false; this.objectivePhaseKey = '';
+    this.inventory = new WeaponInventory();
+    this.objectiveView.update(0, null, this.controlledId, false, false);
+    this.state.scoreboard = false;
+  }
+  startObjectiveSandbox(config: Partial<ObjectiveConfig> = {}) {
+    this.interact(false);
+    this.objectiveSession = new ObjectiveSession(config);
+    this.controlledId = 'attacker-1'; this.deviceEquipped = false; this.objectivePhaseKey = '';
+    this.state = {...INITIAL_HUD};
+    this.economy = this.objectiveSession.economyFor(this.controlledId);
+    this.inventory = this.objectiveSession.inventoryFor(this.controlledId);
+    this.resetPosition(); this.objectivePhaseChanged();
+    this.shopOpen = true; this.input.shopOpen = true; this.input.active = false;
+    this.input.releasePointerLock(); this.onShop(true); this.emitHud();
+  }
+  configureObjective(config: Partial<ObjectiveConfig>) { this.startObjectiveSandbox(config); }
+
+  private objectiveIntent(type: ObjectiveCommand['type'], host = false) {
+    if (!this.objectiveSession) return;
+    const snapshot = this.objectiveSession.snapshot;
+    const result = this.objectiveSession.authority.dispatch({
+      id:`local:${snapshot.epoch}:${++this.objectiveSequence}`, epoch:snapshot.epoch, round:snapshot.round, type,
+    }, this.controlledId, host);
+    this.objectiveSession.sync(); return result;
+  }
+  interact(held: boolean) {
+    if (!this.input) return;
+    this.input.interactHeld = held;
+    if (!this.objectiveSession) return;
+    if (held && (this.mode !== 'playing' || this.shopOpen || !this.objectiveEligibility().eligible)) return;
+    if (held) {
+      this.input.fireHeld = false; this.input.touchAds(false);
+      this.velocity.setAll(0); // Do not let residual deceleration cancel a stationary hold.
+      this.objectiveSession.authority.updatePosition(this.controlledId, this.player.position);
+    }
+    this.objectiveIntent(held ? 'interact-start' : 'interact-stop');
+    this.emitHud();
+  }
+  showScoreboard(held: boolean) {
+    this.input.scoreboardHeld = held; this.state.scoreboard = held; this.emitHud();
+  }
+  nextObjectiveRound() {
+    if (this.objectiveIntent('next-round', true)?.ok) this.objectivePhaseChanged();
+  }
+  rematchObjective() {
+    if (this.objectiveIntent('rematch', true)?.ok) this.objectivePhaseChanged();
+  }
+  controlObjectivePlayer(id: string) {
+    const session = this.objectiveSession;
+    const player = session?.snapshot.players.find(p => p.id === id);
+    if (!session || !player?.connected) return;
+    this.interact(false); session.authority.equipCore(this.controlledId, false);
+    this.deviceEquipped = false; this.controlledId = id;
+    this.economy = session.economyFor(id); this.inventory = session.inventoryFor(id);
+    this.player.position.set(player.position.x, player.position.y, player.position.z);
+    this.player.computeWorldMatrix(true); this.velocity.setAll(0); this.velocityY = 0;
+    this.pitch = 0; this.yaw = player.team === 'attackers' ? 0 : Math.PI;
+    this.weapon.equip(this.inventory.definition); this.inventory.draw();
+    this.weapon.setVisible(this.mode !== 'menu'); this.updateCamera(); this.emitHud();
+  }
+  teleportObjectiveSite(id: 'A' | 'B') {
+    if (!this.objectiveSession) return;
+    const site = OBJECTIVE_SITES.find(s => s.id === id);
+    if (!site) return;
+    this.interact(false); this.velocity.setAll(0); this.velocityY = 0;
+    const s = this.objectiveSession.snapshot;
+    const actor = s.players.find(p => p.id === this.controlledId);
+    const center = actor?.team === 'defenders' && s.plantedSite === id && s.corePosition ? s.corePosition : site.position;
+    const offsets = actor?.team === 'defenders' ? [[0,-1.25],[1.25,0],[-1.25,0],[0,1.25],[0,0]] : [[0,0],[0,-1.25],[1.25,0],[-1.25,0],[0,1.25]];
+    const offset = offsets.find(([x,z]) => !s.players.some(p => p.id !== this.controlledId && p.alive && p.connected && Math.hypot(p.position.x-center.x-x,p.position.z-center.z-z) < .9)) ?? offsets[0];
+    this.player.position.set(center.x+offset[0], .86, center.z+offset[1]);
+    this.player.computeWorldMatrix(true);
+    this.objectiveSession.authority.updatePosition(this.controlledId, this.player.position);
+    this.updateCamera(); this.emitHud();
+  }
+  objectiveTestDamage(amount = 20) {
+    const s = this.objectiveSession?.snapshot;
+    if (!s) return;
+    this.objectiveSession!.damage(this.controlledId, amount, `${s.epoch}:${s.round}:test:${++this.objectiveSequence}`);
+    this.objectivePhaseChanged(); this.emitHud();
+  }
+  disconnectObjectivePlayer(id: string) {
+    const s = this.objectiveSession?.snapshot;
+    if (!s) return;
+    this.objectiveSession!.authority.disconnect(id, `${s.epoch}:${s.round}:disconnect:${++this.objectiveSequence}`);
+    this.objectiveSession!.sync(); this.objectivePhaseChanged(); this.emitHud();
+  }
+  private holsterCore() {
+    if (!this.deviceEquipped) return;
+    this.objectiveSession?.authority.equipCore(this.controlledId, false);
+    this.deviceEquipped = false;
+    this.weapon.setVisible(this.mode !== 'menu');
+  }
+  private objectiveEligibility(): {eligible:boolean;label:string} {
+    const s = this.objectiveSession?.snapshot;
+    const p = s?.players.find(player => player.id === this.controlledId);
+    if (!s || !p?.alive || !p.connected || !['combat','planted'].includes(s.phase)) return {eligible:false,label:'OBJECTIVE UNAVAILABLE'};
+    if (s.phase === 'planted') {
+      const near = !!s.corePosition && Vector3.Distance(this.player.position, new Vector3(s.corePosition.x,s.corePosition.y,s.corePosition.z)) <= 2.2;
+      return {eligible:p.team === 'defenders' && near, label:p.team === 'defenders' ? near ? 'DEFUSE ROYAL SIGNAL CORE' : 'APPROACH THE CORE' : 'DEFEND THE ROYAL SIGNAL CORE'};
+    }
+    if (p.team !== 'attackers') return {eligible:false,label:'PREVENT THE PLANT'};
+    if (s.coreState === 'dropped' && s.corePosition) {
+      const near = Vector3.Distance(this.player.position, new Vector3(s.corePosition.x,s.corePosition.y,s.corePosition.z)) <= 2.2;
+      return {eligible:near,label:near ? 'RECOVER ROYAL SIGNAL CORE' : 'APPROACH THE DROPPED CORE'};
+    }
+    if (s.carrierId !== this.controlledId) return {eligible:false,label:'ONLY THE DESIGNATED CARRIER CAN PLANT'};
+    if (!this.deviceEquipped) return {eligible:false,label:'EQUIP ROYAL SIGNAL CORE · 4'};
+    const site = OBJECTIVE_SITES.find(site => (s.config.activeSite === 'both' || s.config.activeSite === site.id) &&
+      Math.hypot(this.player.position.x-site.position.x,this.player.position.z-site.position.z) <= site.radius);
+    return {eligible:!!site,label:site ? `PLANT AT ${site.id} SITE` : 'ENTER AN ACTIVE A OR B SITE'};
+  }
+  private objectivePhaseChanged() {
+    const session = this.objectiveSession;
+    if (!session) return;
+    const s = session.snapshot;
+    if (s.coreState !== 'carried' || s.carrierId !== this.controlledId) this.holsterCore();
+    const key = `${s.epoch}:${s.round}:${s.phase}`;
+    if (key === this.objectivePhaseKey) return;
+    this.objectivePhaseKey = key;
+    this.economy = session.economyFor(this.controlledId);
+    this.inventory = session.inventoryFor(this.controlledId);
+    if (s.phase === 'buy') {
+      this.deviceEquipped = false;
+      this.weapon.equip(this.inventory.definition);
+      const player = s.players.find(p => p.id === this.controlledId)!;
+      this.player.position.set(player.position.x,player.position.y,player.position.z);
+      this.velocity.setAll(0); this.velocityY = 0; this.updateCamera();
+      for (const target of this.map.targets) target.root.setEnabled(false);
+      if (this.mode !== 'menu') this.openShop();
+    } else if (s.phase === 'combat') {
+      this.closeShop();
+    } else if (s.phase === 'result' || s.phase === 'transition') {
+      this.shopOpen = false; this.input.shopOpen = false; this.onShop(false);
+      this.input.active = false; this.input.shopEnabled = false; this.input.releasePointerLock();
+      this.state.ads = false; this.state.sprinting = false; this.velocity.setAll(0);
+    }
+    this.input.shopEnabled = this.mode === 'playing' && this.objectivePhaseAllowsInput();
+    this.emitHud();
   }
   private resetTargets() {
     for (const target of this.map.targets) {
@@ -281,16 +470,16 @@ export class StrikeGame {
     this.emitHud();
   }
   inspect() {
-    if (this.mode === 'playing' && !this.shopOpen && this.inventory.inspect()) {
+    if (this.mode === 'playing' && !this.shopOpen && !this.deviceEquipped && this.inventory.inspect()) {
       this.input.touchAds(false); this.emitHud();
     }
   }
   setAds(active: boolean) {
-    this.input.adsHeld = this.mode === 'playing' && !this.shopOpen && active;
+    this.input.adsHeld = this.mode === 'playing' && !this.shopOpen && !this.deviceEquipped && active;
     this.refreshAim();
   }
   private refreshAim() {
-    this.state.ads = this.mode === 'playing' && !this.shopOpen && this.input.adsHeld && !this.inventory.busy && this.inventory.definition.kind !== 'knife';
+    this.state.ads = this.mode === 'playing' && !this.shopOpen && !this.deviceEquipped && this.input.adsHeld && !this.inventory.busy && this.inventory.definition.kind !== 'knife';
     this.input.aimMultiplier = this.state.ads
       ? this.settings.adsSensitivity * (this.inventory.activeId === 'sniper' ? this.settings.scopedSensitivity : 1) : 1;
   }
@@ -300,17 +489,20 @@ export class StrikeGame {
   }
   jump() { if (this.mode === 'playing' && !this.shopOpen) this.jumpBuffer = .12; }
   reload() {
-    if (this.mode === 'playing' && !this.shopOpen && this.inventory.reload()) {
+    if (this.mode === 'playing' && !this.shopOpen && !this.deviceEquipped && this.inventory.reload()) {
       this.input.touchAds(false); this.audio.reload(); this.emitHud();
     }
   }
 
   private pick(ray: Ray): PickingInfo | null {
     return this.scene.pickWithRay(ray, mesh => mesh.isEnabled() && mesh.isPickable &&
-      (mesh.metadata?.solid || typeof mesh.metadata?.targetIndex === 'number'));
+      (mesh.metadata?.solid || typeof mesh.metadata?.targetIndex === 'number' || typeof mesh.metadata?.objectiveActorId === 'string'));
   }
   shoot() {
-    if (this.mode !== 'playing' || this.shopOpen || this.state.sprinting ||
+    const objective = this.objectiveSession?.snapshot;
+    const actor = objective?.players.find(p => p.id === this.controlledId);
+    if (this.mode !== 'playing' || this.shopOpen || this.deviceEquipped || this.state.sprinting ||
+      (objective && (!actor?.alive || !actor.connected || objective.interaction?.playerId === this.controlledId)) ||
       (this.economy && this.economy.snapshot.phase !== 'live')) return;
     const def = this.inventory.definition;
     if (!this.inventory.fire()) {
@@ -344,7 +536,20 @@ export class StrikeGame {
     }
     if (hit?.hit && hit.pickedMesh && hit.pickedPoint) {
       const index = hit.pickedMesh.metadata?.targetIndex;
-      if (typeof index === 'number') {
+      const objectiveActorId = hit.pickedMesh.metadata?.objectiveActorId;
+      if (this.objectiveSession && typeof objectiveActorId === 'string') {
+        const victim = objective?.players.find(p => p.id === objectiveActorId);
+        if (actor && victim?.alive && victim.team !== actor.team) {
+          const headshot = !!hit.pickedMesh.metadata?.headshot;
+          if (this.objectiveSession.damage(victim.id, headshot ? def.headDamage : def.damage,
+            `${objective!.epoch}:${objective!.round}:shot:${++this.objectiveSequence}`, this.controlledId)) {
+            this.state.hits++; this.state.hitAt = performance.now(); this.state.headshot = headshot;
+            const killed = !this.objectiveSession.snapshot.players.find(p => p.id === victim.id)?.alive;
+            if (killed) this.state.kills++;
+            this.audio.hit(killed); this.objectivePhaseChanged();
+          }
+        }
+      } else if (!this.objectiveSession && typeof index === 'number') {
         const target = this.map.targets[index];
         if (target.health > 0) {
           const headshot = !!hit.pickedMesh.metadata?.headshot;
@@ -398,7 +603,8 @@ export class StrikeGame {
   private readonly frame = () => {
     if (this.disposed) return;
     // Substep collision movement on slower devices; never scale mouse pixel deltas by dt.
-    const dt = Math.min(this.engine.getDeltaTime() / 1000, .25);
+    const elapsed = Math.max(0, this.engine.getDeltaTime() / 1000);
+    const dt = Math.min(elapsed, .25);
     let look = {x:0, y:0};
     if (this.mode !== 'paused') this.time += dt;
     this.map.animate(this.time);
@@ -410,7 +616,10 @@ export class StrikeGame {
       if (this.inventory.update(dt)) this.weapon.equip(this.inventory.definition);
       if (previousAction !== this.inventory.action) this.emitHud();
       this.input.update(); this.refreshAim();
-      const movementEnabled = !this.shopOpen && this.economy?.snapshot.phase !== 'ended';
+      const objectivePlayer = this.objectiveSession?.snapshot.players.find(p => p.id === this.controlledId);
+      const objectivePhase = this.objectiveSession?.snapshot.phase;
+      const movementEnabled = !this.shopOpen && this.economy?.snapshot.phase !== 'ended' &&
+        (!this.objectiveSession || (objectivePlayer?.alive && objectivePlayer.connected && (objectivePhase === 'combat' || objectivePhase === 'planted')));
       look = this.input.consumeLook();
       this.yaw += look.x;
       this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch + look.y));
@@ -418,19 +627,28 @@ export class StrikeGame {
       if (movementEnabled) for (let i = 0; i < steps; i++) this.move(dt / steps);
       if (this.player.position.y < -5) this.restart();
       this.updateCamera();
+      if (this.objectiveSession) {
+        this.objectiveSession.authority.updatePosition(this.controlledId, this.player.position);
+        this.objectiveSession.advance(elapsed); // Trusted local clock; UI progress never completes an action.
+        this.objectivePhaseChanged();
+      }
       const desiredFov = (this.state.ads ? Math.min(this.settings.fov, this.inventory.definition.adsFov) : this.settings.fov) * Math.PI / 180;
       this.camera.fov += (desiredFov - this.camera.fov) * (1 - Math.exp(-18 * dt));
       if (this.input.fireHeld && this.inventory.definition.automatic) this.shoot();
-      for (const target of this.map.targets) {
+      for (const target of this.objectiveSession ? [] : this.map.targets) {
         if (target.health <= 0 && this.time >= target.respawnAt) { target.health = 100; target.root.setEnabled(true); }
       }
     }
+    const objectiveInteraction = this.objectiveSession?.snapshot.interaction;
+    this.weapon.setVisible(this.mode !== 'menu' && !this.deviceEquipped && objectiveInteraction?.playerId !== this.controlledId);
     this.weapon.update(this.mode === 'paused' ? 0 : dt, {
       speed: this.mode === 'playing' ? this.velocity.length() : 0, sprinting: this.state.sprinting,
       ads: this.state.ads, action: this.inventory.action, progress: this.inventory.progress,
       lookX:look.x, lookY:look.y, landing:this.landing,
     });
     this.effects.update(this.mode === 'paused' ? 0 : dt);
+    this.objectiveView.update(this.mode === 'paused' ? 0 : dt, this.mode === 'menu' ? null : this.objectiveSession?.snapshot ?? null,
+      this.controlledId, this.deviceEquipped, this.settings.sound);
     this.scene.render();
     this.hudTimer += dt;
     if (this.hudTimer > .08) { this.emitHud(); this.hudTimer = 0; }
@@ -438,14 +656,25 @@ export class StrikeGame {
 
   private emitHud() {
     const w = this.inventory.definition, a = this.inventory.ammunition;
-    const economy = this.economy?.snapshot ?? null;
+    const objective = this.objectiveSession?.snapshot ?? null;
+    const controlled = objective?.players.find(p => p.id === this.controlledId);
+    const account = this.economy?.snapshot ?? null;
+    // Disconnection is not a damage transaction, so the round authority owns the
+    // zero-health presentation for an inactive actor as well as elimination rules.
+    const economy = account && controlled ? Object.freeze({...account,health:controlled.health}) : account;
+    const eligibility = this.objectiveEligibility();
     Object.assign(this.state, { ammo:a.magazine, reserve:a.reserve, weaponId:w.id, weaponName:w.name,
       weaponKind:w.kind, slot:w.slot, primaryId:this.inventory.primaryId, action:this.inventory.action,
       reloading:this.inventory.action === 'reloading', fps:Math.round(this.engine.getFps()),
       locked:document.pointerLockElement === this.canvas, economy,
       economyMode:!!economy, credits:economy?.credits ?? 800,
       health:economy?.health ?? 100, armor:economy?.armor ?? 0, armorType:economy?.armorType ?? null,
-      phase:economy?.phase ?? 'buy', round:economy?.round ?? 1 });
+      phase:economy?.phase ?? 'buy', round:objective?.round ?? economy?.round ?? 1,
+      objective, controlledId:this.controlledId, objectiveEquipped:this.deviceEquipped,
+      interactHeld:this.input.interactHeld, scoreboard:this.state.scoreboard,
+      canInteract:eligibility.eligible, interactLabel:eligibility.label,
+      playerPosition:{x:this.player.position.x,y:this.player.position.y,z:this.player.position.z} });
+    if (this.deviceEquipped) Object.assign(this.state, {weaponName:'ROYAL SIGNAL CORE',weaponKind:'objective',slot:4,ammo:0,reserve:0});
     this.onHud({ ...this.state });
   }
   private readonly resize = () => this.engine.resize();
@@ -454,7 +683,7 @@ export class StrikeGame {
     this.disposed = true;
     this.engine.stopRenderLoop(this.frame);
     window.removeEventListener('resize', this.resize);
-    this.input.dispose(); this.effects.dispose(); this.weapon.dispose(); this.audio.dispose();
+    this.input.dispose(); this.effects.dispose(); this.objectiveView.dispose(); this.weapon.dispose(); this.audio.dispose();
     this.map.dispose(); this.scene.dispose(); this.engine.dispose();
   }
 }

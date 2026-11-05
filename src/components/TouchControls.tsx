@@ -161,7 +161,7 @@ export default function TouchControls({ input, onReload, onJump, onSlot, onInspe
           <b>{value}</b><span>{value === 1 ? primaryName : value === 2 ? 'PISTOL' : 'KNIFE'}</span>
         </button>)}
         <button type="button" className="touch-primary-cycle" aria-label="Change primary weapon" onPointerDown={event => action(event, () => onPrimaryCycle?.())}><RotateCw size={13} /><span>LOADOUT</span></button>
-        <button type="button" className="touch-inspect" aria-label="Inspect weapon" onPointerDown={event => action(event, () => onInspect?.())}><Search size={14} /><span>INSPECT</span></button>
+        <button type="button" className="touch-inspect" aria-label="Inspect weapon" aria-keyshortcuts="V" title="Inspect weapon (V)" onPointerDown={event => action(event, () => onInspect?.())}><Search size={14} /><span>INSPECT</span></button>
       </div>
       <button className="touch-button reload" type="button" aria-label="Reload" style={{ touchAction: 'none' }} onPointerDown={event => action(event, onReload)}>
         <RotateCw aria-hidden="true" size={21} />

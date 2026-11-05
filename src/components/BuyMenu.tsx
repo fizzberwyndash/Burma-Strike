@@ -8,6 +8,8 @@ import type { WeaponId } from '../game/weapons';
 import WeaponPreview from './WeaponPreview';
 
 interface BuyMenuProps {
+  objectiveMode?: boolean;
+  objectiveStatus?: string;
   snapshot: EconomySnapshot | null;
   onClose: () => void;
   onBuy: (id: string) => void;
@@ -23,7 +25,7 @@ const categories = ['All', 'Pistols', 'SMGs', 'Rifles', 'Snipers', 'Armor'] as c
 const credits = (amount: number) => new Intl.NumberFormat('en-US').format(amount);
 
 /** Presentation only: all purchase, credit and armor changes go through the practice authority. */
-export default function BuyMenu({ snapshot, onClose, onBuy, onSell, onEquip, onStartDrill, onStartRound, onFinishRound, onNewRound, onTestDamage }: BuyMenuProps) {
+export default function BuyMenu({ snapshot, onClose, onBuy, onSell, onEquip, onStartDrill, onStartRound, onFinishRound, onNewRound, onTestDamage, objectiveMode = false, objectiveStatus }: BuyMenuProps) {
   const [category, setCategory] = useState<(typeof categories)[number]>('All');
   const [selectedId, setSelectedId] = useState<ShopItemId>('pistol');
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -65,7 +67,7 @@ export default function BuyMenu({ snapshot, onClose, onBuy, onSell, onEquip, onS
         <div className="shop-wallet"><Coins size={18} /><div><small>AVAILABLE CREDITS</small><strong>{snapshot ? credits(snapshot.credits) : '—'}<span>/ 9,000</span></strong></div></div>
         <button ref={closeRef} className="shop-close" aria-label="Close shop" onClick={onClose}><X size={21} /><kbd>ESC</kbd></button>
       </header>
-      <div className={`shop-phase ${snapshot?.phase ?? 'catalog'}`}><span><i />{phaseLabel}{snapshot && <b>ROUND {String(snapshot.round).padStart(2,'0')}</b>}</span><small>{snapshot ? 'LOCAL ECONOMY DRILL · NO MULTIPLAYER SERVER' : 'FREE ARSENAL · START A LOCAL DRILL TO TEST PURCHASES'}</small></div>
+      <div className={`shop-phase ${snapshot?.phase ?? 'catalog'}`}><span><i />{objectiveMode ? objectiveStatus : phaseLabel}{snapshot && <b>ROUND {String(snapshot.round).padStart(2,'0')}</b>}</span><small>{objectiveMode ? 'ROYAL SIGNAL CORE · LOCAL OBJECTIVE SANDBOX' : snapshot ? 'LOCAL ECONOMY DRILL · NO MULTIPLAYER SERVER' : 'FREE ARSENAL · START A LOCAL DRILL TO TEST PURCHASES'}</small></div>
       <nav className="shop-categories" aria-label="Shop categories">{categories.map((name, index) => <button key={name} className={category === name ? 'active' : ''} aria-pressed={category === name} onClick={() => chooseCategory(name)}><span>0{index + 1}</span>{name}</button>)}</nav>
       <div className="shop-body">
         <section className="shop-catalog" aria-label={`${category} equipment`}>
@@ -100,7 +102,7 @@ export default function BuyMenu({ snapshot, onClose, onBuy, onSell, onEquip, onS
       </div>
       <footer className="shop-footer">
         <div className="shop-live-status" role="status" aria-live="polite"><span className="shop-status-dot" /><div><strong>{snapshot?.lastMessage || (snapshot ? 'Build your kit. Start the round when ready.' : 'Catalog preview. Your free Practice arsenal is unchanged.')}</strong><small>{snapshot ? 'WIN +3,000 · LOSS +1,900 · ELIMINATION +200' : 'LOCAL TESTING ONLY · NO ONLINE TRANSACTIONS'}</small></div></div>
-        {snapshot && <div className="shop-round-controls"><span className="shop-health-status"><Heart size={12} />{Math.ceil(snapshot.health)}<Shield size={12} />{Math.ceil(snapshot.armor)}</span>{snapshot.phase === 'buy' ? <button className="shop-round-primary" onClick={onStartRound}>START ROUND <ArrowRight size={16} /></button> : snapshot.phase === 'live' ? <><button className="shop-damage-test" onClick={onTestDamage}>TEST 40 DAMAGE</button><button onClick={() => onFinishRound('loss')}>SIMULATE LOSS</button><button className="shop-round-primary" onClick={() => onFinishRound('win')}>SIMULATE WIN</button></> : <button className="shop-round-primary" onClick={onNewRound}>NEXT ROUND <ArrowRight size={16} /></button>}</div>}
+        {snapshot && <div className="shop-round-controls"><span className="shop-health-status"><Heart size={12} />{Math.ceil(snapshot.health)}<Shield size={12} />{Math.ceil(snapshot.armor)}</span>{objectiveMode ? <span className="shop-objective-clock">{objectiveStatus}</span> : snapshot.phase === 'buy' ? <button className="shop-round-primary" onClick={onStartRound}>START ROUND <ArrowRight size={16} /></button> : snapshot.phase === 'live' ? <><button className="shop-damage-test" onClick={onTestDamage}>TEST 40 DAMAGE</button><button onClick={() => onFinishRound('loss')}>SIMULATE LOSS</button><button className="shop-round-primary" onClick={() => onFinishRound('win')}>SIMULATE WIN</button></> : <button className="shop-round-primary" onClick={onNewRound}>NEXT ROUND <ArrowRight size={16} /></button>}</div>}
       </footer>
     </section>
   </div>;

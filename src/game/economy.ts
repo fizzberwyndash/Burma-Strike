@@ -28,7 +28,7 @@ export type EconomyCommand =
   | {type:'damage'; amount:number}
   | {type:'elimination'; eventId:string};
 export interface EconomyResult { readonly ok: boolean; readonly message: string; }
-export interface EconomyRules { armorAbsorption?: number; }
+export interface EconomyRules { armorAbsorption?: number; autoFinishOnDeath?: boolean; }
 interface Receipt { price:number; previousArmor?: {type:ArmorType | null; points:number}; }
 
 export const STARTING_CREDITS = 800;
@@ -60,8 +60,10 @@ export class PracticeEconomy {
   #message = 'Practice economy ready. Buy equipment, then start the round.';
   #eliminations = new Set<string>();
   #absorption: number;
+  #autoFinishOnDeath: boolean;
 
   constructor(rules: EconomyRules = {}) {
+    this.#autoFinishOnDeath = rules.autoFinishOnDeath !== false;
     const ratio = rules.armorAbsorption;
     this.#absorption = typeof ratio === 'number' && Number.isFinite(ratio)
       ? Math.max(0, Math.min(1, ratio)) : DEFAULT_ARMOR_ABSORPTION;
@@ -182,7 +184,7 @@ export class PracticeEconomy {
     this.#armor = Math.max(0, this.#armor - absorbed);
     this.#health = Math.max(0, this.#health - (amount - absorbed));
     if (this.#armor === 0) this.#armorType = null;
-    if (this.#health === 0) return this.#finish('loss');
+    if (this.#health === 0 && this.#autoFinishOnDeath) return this.#finish('loss');
     return this.#result(true, `Practice damage: ${Number((amount-absorbed).toFixed(2))} HP, ${Number(absorbed.toFixed(2))} armor consumed.`);
   }
 }
