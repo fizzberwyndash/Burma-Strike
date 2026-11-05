@@ -16,6 +16,8 @@ import { WeaponInventory } from './weapons';
 import type { WeaponId, WeaponAction } from './weapons';
 import { DEFAULT_SETTINGS, normalizeSettings } from './settings';
 import type { GameSettings } from './settings';
+import { PracticeEconomy } from './economy';
+import type { EconomyCommand, EconomySnapshot } from './economy';
 export type { GameSettings } from './settings';
 
 export type GameMode = 'menu' | 'playing' | 'paused';
@@ -25,12 +27,16 @@ export interface HudState {
   weaponId: WeaponId; weaponName: string; weaponKind: WeaponId | 'objective';
   slot: 1 | 2 | 3 | 4; primaryId: 'rifle' | 'smg' | 'sniper';
   action: WeaponAction; ads: boolean; sprinting: boolean;
+  armor: number; armorType: 'light-armor' | 'heavy-armor' | null;
+  credits: number; economyMode: boolean; phase: 'buy' | 'live' | 'ended'; round: number;
+  economy: EconomySnapshot | null;
 }
 export const INITIAL_HUD: HudState = {
   ammo: 12, reserve: 48, health: 100, kills: 0, shots: 0, hits: 0,
   fps: 0, reloading: false, hitAt: 0, headshot: false, locked: false,
-  weaponId: 'pistol', weaponName: 'KITE–12', weaponKind: 'pistol', slot: 2,
+  weaponId: 'pistol', weaponName: 'SHWE-9', weaponKind: 'pistol', slot: 2,
   primaryId: 'rifle', action: 'ready', ads: false, sprinting: false,
+  armor: 0, armorType: null, credits: 800, economyMode: false, phase: 'buy', round: 1, economy: null,
 };
 
 /** Owns the existing Practice scene. Input, inventory and presentation have separate lifetimes. */
@@ -59,12 +65,15 @@ export class StrikeGame {
   private jumpBuffer = 0;
   private coyote = 0;
   private disposed = false;
+  private economy: PracticeEconomy | null = null;
+  private shopOpen = false;
 
   constructor(
     private canvas: HTMLCanvasElement,
     private onHud: (state: HudState) => void,
     onPause: () => void,
     settings: GameSettings,
+    private onShop: (open: boolean) => void = () => {},
   ) {
     this.engine = new Engine(canvas, true, { stencil: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
     this.engine.setHardwareScalingLevel(Math.max(1, window.devicePixelRatio / 1.5));
@@ -89,6 +98,7 @@ export class StrikeGame {
       onPause, onShoot: () => this.shoot(), onReload: () => this.reload(), onJump: () => this.jump(),
       onSlot: slot => this.equipSlot(slot), onPrimaryCycle: () => this.cyclePrimary(),
       onInspect: () => this.inspect(), onAds: active => this.setAds(active),
+      onShop: () => this.shopOpen ? this.closeShop() : this.openShop(),
     });
     this.configure(settings);
     this.camera.fov = this.settings.fov * Math.PI / 180;
@@ -109,15 +119,17 @@ export class StrikeGame {
   setMode(mode: GameMode) {
     const previous = this.mode;
     this.mode = mode;
-    this.input.active = mode === 'playing';
+    this.input.shopEnabled = mode === 'playing';
+    this.input.active = mode === 'playing' && !this.shopOpen;
     this.weapon.setVisible(mode !== 'menu');
     if (mode === 'playing') {
       if (previous === 'menu') { this.resetPosition(); this.inventory.draw(); this.updateCamera(); }
-      this.input.requestPointerLock();
+      if (!this.shopOpen) this.input.requestPointerLock();
     } else {
       this.state.ads = false; this.state.sprinting = false;
       this.velocity.setAll(0); this.jumpBuffer = 0;
-      if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+      this.input.releasePointerLock();
+      if (mode === 'menu') { this.shopOpen = false; this.input.shopOpen = false; this.onShop(false); }
     }
     this.emitHud();
   }
@@ -130,6 +142,9 @@ export class StrikeGame {
   }
 
   restart() {
+    // Free Range retains its original reset. Economy resets are explicit fresh drills,
+    // rather than a way to grant purchased equipment or bypass phase validation.
+    if (this.economy) { this.startEconomyDrill(); return; }
     this.state = { ...INITIAL_HUD };
     this.input.touchTrigger(false); this.input.touchAds(false);
     this.inventory.reset();
@@ -142,16 +157,22 @@ export class StrikeGame {
   }
 
   equipSlot(slot: number) {
-    if (this.mode === 'menu') return;
-    if (this.inventory.equipSlot(slot)) this.beginSwitch();
+    if (this.mode === 'menu' || this.economy?.snapshot.phase === 'ended') return;
+    if (this.inventory.equipSlot(slot)) {
+      const id = slot === 1 ? this.inventory.primaryId : slot === 2 ? 'pistol' : 'knife';
+      this.economy?.execute({type:'equip', weaponId:id});
+      this.beginSwitch();
+    }
   }
   selectPrimary(id: 'rifle' | 'smg' | 'sniper') {
     if (!['rifle', 'smg', 'sniper'].includes(id)) return;
+    if (this.economy && this.inventory.busy) return;
     // A paused loadout picker may replace its choice repeatedly without advancing the world.
-    if (this.mode === 'paused') { this.inventory.update(10); this.inventory.update(10); }
+    if (this.mode === 'paused' && !this.economy) { this.inventory.update(10); this.inventory.update(10); }
     if (this.inventory.selectPrimary(id)) {
+      this.economy?.execute({type:'equip', weaponId:id});
       this.beginSwitch();
-      if (this.mode === 'paused') {
+      if (this.mode === 'paused' && !this.economy) {
         this.inventory.update(10); this.inventory.update(10);
         this.weapon.equip(this.inventory.definition); this.inventory.draw();
       }
@@ -159,24 +180,117 @@ export class StrikeGame {
     this.emitHud();
   }
   cyclePrimary() {
-    const ids = ['rifle', 'smg', 'sniper'] as const;
-    this.selectPrimary(ids[(ids.indexOf(this.inventory.primaryId) + 1) % ids.length]);
+    const ids = (['rifle', 'smg', 'sniper'] as const).filter(id => this.inventory.owns(id));
+    if (ids.length) this.selectPrimary(ids[(ids.indexOf(this.inventory.primaryId) + 1) % ids.length]);
+  }
+
+  /** Unrestricted arsenal from previous phases, independent of the economy drill. */
+  startFreePractice() {
+    this.economy = null;
+    this.shopOpen = false; this.input.shopOpen = false; this.onShop(false);
+    this.inventory.setOwnership(null);
+    this.restart();
+  }
+
+  startEconomyDrill() {
+    this.economy = new PracticeEconomy();
+    this.state = {...INITIAL_HUD};
+    this.inventory.reset();
+    this.inventory.setOwnership(this.economy.snapshot.ownedWeapons);
+    this.weapon.equip(this.inventory.definition);
+    this.resetPosition(); this.resetTargets(); this.updateCamera();
+    // This may be called from the main menu; setMode('playing') respects the open shop.
+    this.shopOpen = true; this.input.shopOpen = true; this.input.active = false;
+    this.input.releasePointerLock(); this.onShop(true); this.emitHud();
+  }
+
+  openShop() {
+    if (this.mode === 'menu') return;
+    this.shopOpen = true; this.input.shopOpen = true; this.input.active = false;
+    this.state.ads = false; this.state.sprinting = false;
+    this.velocity.setAll(0); this.jumpBuffer = 0;
+    this.input.releasePointerLock(); this.onShop(true); this.emitHud();
+  }
+
+  closeShop() {
+    this.shopOpen = false; this.input.shopOpen = false;
+    this.input.active = this.mode === 'playing';
+    this.onShop(false);
+    if (this.input.active) this.input.requestPointerLock();
+    this.emitHud();
+  }
+
+  private syncEconomyEquipment(refill = false) {
+    if (!this.economy) return;
+    const snapshot = this.economy.snapshot;
+    // Settle any existing transition before a validated shop command auto-equips.
+    if (snapshot.phase === 'buy') { this.inventory.update(10); this.inventory.update(10); }
+    if (refill) this.inventory.reset();
+    this.inventory.setOwnership(snapshot.ownedWeapons);
+    if (snapshot.phase === 'buy') { this.inventory.update(10); this.inventory.update(10); }
+    if (snapshot.primaryId) this.inventory.primaryId = snapshot.primaryId;
+    this.weapon.equip(this.inventory.definition);
+    if (this.inventory.activeId !== snapshot.equipped) {
+      this.inventory.equip(snapshot.equipped);
+    }
+    this.beginSwitch();
+  }
+
+  private economyCommand(command: EconomyCommand, equip = false) {
+    if (!this.economy) return;
+    const result = this.economy.execute(command);
+    if (result.ok && equip) this.syncEconomyEquipment();
+    this.emitHud();
+    return result;
+  }
+
+  buyItem(itemId: string) { return this.economyCommand({type:'buy', itemId}, true); }
+  sellItem(itemId: string) { return this.economyCommand({type:'sell', itemId}, true); }
+  shopEquipWeapon(id: WeaponId) {
+    // A live-round shop cannot be used to skip a reload or reset a weapon cooldown.
+    if (this.economy?.snapshot.phase === 'live' && this.inventory.busy) return;
+    return this.economyCommand({type:'equip', weaponId:id}, true);
+  }
+
+  startRound() {
+    if (this.economyCommand({type:'start-round'})?.ok) {
+      this.resetPosition(); this.updateCamera(); this.closeShop();
+    }
+  }
+  finishRound(outcome: 'win' | 'loss') {
+    if (this.economyCommand({type:'finish-round', outcome})?.ok) this.openShop();
+  }
+  newRound() {
+    if (!this.economyCommand({type:'new-round'})?.ok) return;
+    this.syncEconomyEquipment(true);
+    this.resetPosition(); this.resetTargets(); this.updateCamera(); this.openShop();
+  }
+  /** A real damage path for the explicitly labeled local drill controls. */
+  testDamage(amount = 40) {
+    const result = this.economyCommand({type:'damage', amount});
+    if (result?.ok && this.economy?.snapshot.phase === 'ended') this.openShop();
+    return result;
+  }
+  private resetTargets() {
+    for (const target of this.map.targets) {
+      target.health = 100; target.respawnAt = 0; target.root.setEnabled(true);
+    }
   }
   private beginSwitch() {
     this.input.fireHeld = false; this.input.touchAds(false); this.state.ads = false;
     this.emitHud();
   }
   inspect() {
-    if (this.mode === 'playing' && this.inventory.inspect()) {
+    if (this.mode === 'playing' && !this.shopOpen && this.inventory.inspect()) {
       this.input.touchAds(false); this.emitHud();
     }
   }
   setAds(active: boolean) {
-    this.input.adsHeld = this.mode === 'playing' && active;
+    this.input.adsHeld = this.mode === 'playing' && !this.shopOpen && active;
     this.refreshAim();
   }
   private refreshAim() {
-    this.state.ads = this.mode === 'playing' && this.input.adsHeld && !this.inventory.busy && this.inventory.definition.kind !== 'knife';
+    this.state.ads = this.mode === 'playing' && !this.shopOpen && this.input.adsHeld && !this.inventory.busy && this.inventory.definition.kind !== 'knife';
     this.input.aimMultiplier = this.state.ads
       ? this.settings.adsSensitivity * (this.inventory.activeId === 'sniper' ? this.settings.scopedSensitivity : 1) : 1;
   }
@@ -184,9 +298,9 @@ export class StrikeGame {
     const ray = new Ray(this.player.position, Vector3.Down(), 0.91);
     return !!this.scene.pickWithRay(ray, m => m !== this.player && !!m.metadata?.solid)?.hit;
   }
-  jump() { if (this.mode === 'playing') this.jumpBuffer = .12; }
+  jump() { if (this.mode === 'playing' && !this.shopOpen) this.jumpBuffer = .12; }
   reload() {
-    if (this.mode === 'playing' && this.inventory.reload()) {
+    if (this.mode === 'playing' && !this.shopOpen && this.inventory.reload()) {
       this.input.touchAds(false); this.audio.reload(); this.emitHud();
     }
   }
@@ -196,7 +310,8 @@ export class StrikeGame {
       (mesh.metadata?.solid || typeof mesh.metadata?.targetIndex === 'number'));
   }
   shoot() {
-    if (this.mode !== 'playing' || this.state.sprinting) return;
+    if (this.mode !== 'playing' || this.shopOpen || this.state.sprinting ||
+      (this.economy && this.economy.snapshot.phase !== 'live')) return;
     const def = this.inventory.definition;
     if (!this.inventory.fire()) {
       if (!this.inventory.busy && def.kind !== 'knife' && this.inventory.ammunition.magazine === 0) this.reload();
@@ -238,6 +353,7 @@ export class StrikeGame {
           this.audio.hit(target.health === 0);
           if (target.health === 0) {
             this.state.kills++; target.root.setEnabled(false); target.respawnAt = this.time + 3;
+            if (this.economy) this.economy.execute({type:'elimination', eventId:`${this.economy.snapshot.round}:${index}:${this.state.kills}`});
           }
         }
       }
@@ -294,11 +410,12 @@ export class StrikeGame {
       if (this.inventory.update(dt)) this.weapon.equip(this.inventory.definition);
       if (previousAction !== this.inventory.action) this.emitHud();
       this.input.update(); this.refreshAim();
+      const movementEnabled = !this.shopOpen && this.economy?.snapshot.phase !== 'ended';
       look = this.input.consumeLook();
       this.yaw += look.x;
       this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch + look.y));
       const steps = Math.max(1, Math.ceil(dt / .016));
-      for (let i = 0; i < steps; i++) this.move(dt / steps);
+      if (movementEnabled) for (let i = 0; i < steps; i++) this.move(dt / steps);
       if (this.player.position.y < -5) this.restart();
       this.updateCamera();
       const desiredFov = (this.state.ads ? Math.min(this.settings.fov, this.inventory.definition.adsFov) : this.settings.fov) * Math.PI / 180;
@@ -321,10 +438,14 @@ export class StrikeGame {
 
   private emitHud() {
     const w = this.inventory.definition, a = this.inventory.ammunition;
+    const economy = this.economy?.snapshot ?? null;
     Object.assign(this.state, { ammo:a.magazine, reserve:a.reserve, weaponId:w.id, weaponName:w.name,
       weaponKind:w.kind, slot:w.slot, primaryId:this.inventory.primaryId, action:this.inventory.action,
       reloading:this.inventory.action === 'reloading', fps:Math.round(this.engine.getFps()),
-      locked:document.pointerLockElement === this.canvas });
+      locked:document.pointerLockElement === this.canvas, economy,
+      economyMode:!!economy, credits:economy?.credits ?? 800,
+      health:economy?.health ?? 100, armor:economy?.armor ?? 0, armorType:economy?.armorType ?? null,
+      phase:economy?.phase ?? 'buy', round:economy?.round ?? 1 });
     this.onHud({ ...this.state });
   }
   private readonly resize = () => this.engine.resize();

@@ -12,10 +12,11 @@ interface TouchControlsProps {
   onPrimaryCycle?: () => void;
   slot?: number;
   primaryName?: string;
+  ownedSlots?: readonly number[];
 }
 
 /** Each control owns its pointer, allowing movement, aiming and firing together. */
-export default function TouchControls({ input, onReload, onJump, onSlot, onInspect, onPrimaryCycle, slot = 2, primaryName = 'RIFLE' }: TouchControlsProps) {
+export default function TouchControls({ input, onReload, onJump, onSlot, onInspect, onPrimaryCycle, slot = 2, primaryName = 'RIFLE', ownedSlots }: TouchControlsProps) {
   const movePointer = useRef<number | null>(null);
   const aimPointer = useRef<number | null>(null);
   const firePointer = useRef<number | null>(null);
@@ -156,7 +157,7 @@ export default function TouchControls({ input, onReload, onJump, onSlot, onInspe
         <Footprints aria-hidden="true" size={21} /><span>SPRINT</span>
       </button>
       <div className="touch-weapon-slots" aria-label="Weapon inventory">
-        {[1, 2, 3].map(value => <button type="button" key={value} className={slot === value ? 'active' : ''} aria-label={`Equip slot ${value}`} aria-pressed={slot === value} onPointerDown={event => action(event, () => onSlot?.(value))}>
+        {[1, 2, 3].map(value => <button type="button" key={value} className={slot === value ? 'active' : ''} aria-label={`Equip slot ${value}`} aria-pressed={slot === value} disabled={ownedSlots !== undefined && !ownedSlots.includes(value)} onPointerDown={event => action(event, () => onSlot?.(value))}>
           <b>{value}</b><span>{value === 1 ? primaryName : value === 2 ? 'PISTOL' : 'KNIFE'}</span>
         </button>)}
         <button type="button" className="touch-primary-cycle" aria-label="Change primary weapon" onPointerDown={event => action(event, () => onPrimaryCycle?.())}><RotateCw size={13} /><span>LOADOUT</span></button>

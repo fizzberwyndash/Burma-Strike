@@ -12,7 +12,7 @@ test('mouse, touch, ADS and keyboard paths share predictable input and fully rel
   win.matchMedia=()=>({matches:false});doc.pointerLockElement=canvas;doc.exitPointerLock=()=>{doc.pointerLockElement=null};
   const sandbox={exports:{},window:win,document:doc};vm.runInNewContext(outputText,sandbox);
   const calls=[];
-  const input=new sandbox.exports.GameInput(canvas,{onPause:()=>calls.push('pause'),onShoot:()=>calls.push('fire'),onReload:()=>calls.push('reload'),onJump:()=>calls.push('jump'),onSlot:n=>calls.push('slot'+n),onPrimaryCycle:()=>calls.push('cycle'),onInspect:()=>calls.push('inspect'),onAds:on=>calls.push('ads'+on)});
+  const input=new sandbox.exports.GameInput(canvas,{onPause:()=>calls.push('pause'),onShoot:()=>calls.push('fire'),onReload:()=>calls.push('reload'),onJump:()=>calls.push('jump'),onSlot:n=>calls.push('slot'+n),onPrimaryCycle:()=>calls.push('cycle'),onInspect:()=>calls.push('inspect'),onAds:on=>calls.push('ads'+on),onShop:()=>calls.push('shop')});
   const emit=(o,n,e={})=>o.listeners.get(n)?.({preventDefault(){},pointerType:'mouse',...e});
   input.active=true;
   emit(doc,'mousemove',{movementX:100,movementY:50});let look=input.consumeLook();
@@ -29,12 +29,30 @@ test('mouse, touch, ADS and keyboard paths share predictable input and fully rel
   assert.equal(calls.filter(x=>x==='fire').length,2);input.touchTrigger(false);
   emit(canvas,'pointerdown',{button:2});assert.equal(input.adsHeld,true);
   emit(win,'pointerup',{button:2});assert.equal(input.adsHeld,false);
-  for(const code of ['Digit1','Digit4','KeyB','KeyF','KeyR','Space'])emit(win,'keydown',{code});
+  for(const code of ['Digit1','Digit4','KeyN','KeyF','KeyR','Space'])emit(win,'keydown',{code});
   for(const action of ['slot1','slot4','cycle','inspect','reload','jump'])assert.ok(calls.includes(action));
   for(const code of ['KeyW','KeyD','ShiftLeft'])emit(win,'keydown',{code});input.update();
   assert.ok(Math.abs(Math.hypot(input.moveX,input.moveY)-1)<1e-8);assert.equal(input.sprinting,true);
   input.touchTrigger(true);input.touchAds(true);emit(win,'blur');
   assert.equal(input.fireHeld,false);assert.equal(input.adsHeld,false);assert.equal(input.sprinting,false);
   assert.equal(input.moveX,0);assert.equal(input.moveY,0);assert.ok(calls.includes('pause'));
+  // The overlay deliberately disables movement, but B/Escape must still close it.
+  input.active=false;input.shopEnabled=true;input.shopOpen=true;
+  emit(win,'keydown',{code:'KeyB'});emit(win,'keydown',{code:'KeyB',repeat:true});
+  emit(win,'keydown',{code:'Escape'});emit(win,'keydown',{code:'KeyN'});
+  assert.equal(calls.filter(x=>x==='shop').length,2);
+  assert.equal(calls.filter(x=>x==='cycle').length,1);
+  input.shopEnabled=false;input.shopOpen=false;
+  emit(win,'keydown',{code:'KeyB'});emit(win,'keydown',{code:'Escape'});
+  assert.equal(calls.filter(x=>x==='shop').length,2);
+  input.active=true;input.touchTrigger(true);input.touchAds(true);input.touchMove(1,1);input.touchSprint(true);
+  const pauseCount=calls.filter(x=>x==='pause').length;
+  emit(doc,'pointerlockchange');
+  input.active=false;input.releasePointerLock();
+  // Controlled shop unlock may be delivered after the shop has already closed.
+  input.active=true;emit(doc,'pointerlockchange');
+  assert.equal(calls.filter(x=>x==='pause').length,pauseCount);
+  assert.equal(input.fireHeld,false);assert.equal(input.adsHeld,false);assert.equal(input.sprinting,false);
+  assert.equal(input.moveX,0);assert.equal(input.moveY,0);
   input.dispose();assert.equal(win.listeners.size+doc.listeners.size+canvas.listeners.size,0);
 });

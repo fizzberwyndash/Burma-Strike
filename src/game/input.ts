@@ -7,6 +7,7 @@ export interface InputCallbacks {
   onPrimaryCycle?: () => void;
   onInspect?: () => void;
   onAds?: (active: boolean) => void;
+  onShop?: () => void;
 }
 
 /** Owns desktop events; touch UI feeds its independent pointers into this class. */
@@ -18,6 +19,9 @@ export class GameInput {
   public fireHeld = false;
   public adsHeld = false;
   public sprinting = false;
+  /** Shop hotkeys remain available while gameplay input is suspended by its overlay. */
+  public shopEnabled = false;
+  public shopOpen = false;
   public lookX = 0;
   public lookY = 0;
   public moveX = 0;
@@ -140,6 +144,12 @@ export class GameInput {
     }
   }
 
+  /** Intentional UI transitions release capture without treating its later event as a pause. */
+  public releasePointerLock(): void {
+    this.hadPointerLock = false;
+    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+  }
+
   public dispose(): void {
     if (this.disposed) return;
     this.enabled = false;
@@ -155,7 +165,7 @@ export class GameInput {
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
     this.canvas.removeEventListener('contextmenu', this.onContextMenu);
-    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+    this.releasePointerLock();
   }
 
   private clearState(): void {
@@ -180,9 +190,14 @@ export class GameInput {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (!this.active) return;
     const code = event.code;
-    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'KeyR', 'Escape', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'KeyB', 'KeyF', 'ShiftLeft', 'ShiftRight'].includes(code)) {
+    if ((code === 'KeyB' && this.shopEnabled) || (code === 'Escape' && this.shopOpen)) {
+      event.preventDefault();
+      if (!event.repeat) this.callbacks.onShop?.();
+      return;
+    }
+    if (!this.active) return;
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'KeyR', 'Escape', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'KeyB', 'KeyN', 'KeyF', 'ShiftLeft', 'ShiftRight'].includes(code)) {
       event.preventDefault();
     }
     if (code === 'Escape') {
@@ -195,7 +210,7 @@ export class GameInput {
     if (code === 'KeyR') this.callbacks.onReload();
     if (code === 'Space') this.callbacks.onJump();
     if (/^Digit[1-4]$/.test(code)) this.callbacks.onSlot?.(Number(code.slice(-1)));
-    if (code === 'KeyB') this.callbacks.onPrimaryCycle?.();
+    if (code === 'KeyN') this.callbacks.onPrimaryCycle?.();
     if (code === 'KeyF') this.callbacks.onInspect?.();
   };
 

@@ -10,10 +10,10 @@ export interface WeaponDefinition {
   tracerLength: number; tracerLife: number;
 }
 export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
-  pistol: { id:'pistol', name:'KITE–12', kind:'pistol', slot:2, magazineSize:12, reserveAmmo:48, fireInterval:.19, reloadTime:1.6, drawTime:.3, holsterTime:.16, damage:34, headDamage:100, range:100, automatic:false, adsFov:72, recoil:1, tracerLength:7, tracerLife:.06 },
-  rifle: { id:'rifle', name:'TAMARIND AR', kind:'rifle', slot:1, magazineSize:30, reserveAmmo:90, fireInterval:.105, reloadTime:2.15, drawTime:.4, holsterTime:.2, damage:34, headDamage:100, range:140, automatic:true, adsFov:66, recoil:1.2, tracerLength:10, tracerLife:.055 },
-  smg: { id:'smg', name:'SWIFT–24', kind:'smg', slot:1, magazineSize:24, reserveAmmo:96, fireInterval:.075, reloadTime:1.8, drawTime:.32, holsterTime:.16, damage:25, headDamage:70, range:85, automatic:true, adsFov:74, recoil:.7, tracerLength:6, tracerLife:.045 },
-  sniper: { id:'sniper', name:'HORNBILL S5', kind:'sniper', slot:1, magazineSize:5, reserveAmmo:20, fireInterval:1.1, reloadTime:2.6, drawTime:.5, holsterTime:.23, damage:100, headDamage:150, range:200, automatic:false, adsFov:28, recoil:2.1, tracerLength:20, tracerLife:.085 },
+  pistol: { id:'pistol', name:'SHWE-9', kind:'pistol', slot:2, magazineSize:12, reserveAmmo:48, fireInterval:.19, reloadTime:1.6, drawTime:.3, holsterTime:.16, damage:34, headDamage:100, range:100, automatic:false, adsFov:72, recoil:1, tracerLength:7, tracerLife:.06 },
+  rifle: { id:'rifle', name:'MUDON AR', kind:'rifle', slot:1, magazineSize:30, reserveAmmo:90, fireInterval:.105, reloadTime:2.15, drawTime:.4, holsterTime:.2, damage:34, headDamage:100, range:140, automatic:true, adsFov:66, recoil:1.2, tracerLength:10, tracerLife:.055 },
+  smg: { id:'smg', name:'BAGAN-21', kind:'smg', slot:1, magazineSize:24, reserveAmmo:96, fireInterval:.075, reloadTime:1.8, drawTime:.32, holsterTime:.16, damage:25, headDamage:70, range:85, automatic:true, adsFov:74, recoil:.7, tracerLength:6, tracerLife:.045 },
+  sniper: { id:'sniper', name:'NAGA SCOPE', kind:'sniper', slot:1, magazineSize:5, reserveAmmo:20, fireInterval:1.1, reloadTime:2.6, drawTime:.5, holsterTime:.23, damage:100, headDamage:150, range:200, automatic:false, adsFov:28, recoil:2.1, tracerLength:20, tracerLife:.085 },
   knife: { id:'knife', name:'LOTUS EDGE', kind:'knife', slot:3, magazineSize:0, reserveAmmo:0, fireInterval:.55, reloadTime:0, drawTime:.25, holsterTime:.14, damage:50, headDamage:100, range:2.2, automatic:false, adsFov:90, recoil:0, tracerLength:0, tracerLife:0 },
 };
 export interface WeaponAmmo { magazine: number; reserve: number; }
@@ -27,6 +27,7 @@ export class WeaponInventory {
   readonly objectiveCarried = false;
   readonly ammo = Object.fromEntries(Object.values(WEAPONS).map(w => [w.id, {magazine:w.magazineSize, reserve:w.reserveAmmo}])) as Record<WeaponId, WeaponAmmo>;
   private pending: WeaponId | null = null;
+  private owned: Set<WeaponId> | null = null;
   private remaining = 0;
   private duration = 0;
 
@@ -40,18 +41,32 @@ export class WeaponInventory {
     this.action = action; this.duration = duration; this.remaining = duration;
   }
   draw() { this.begin('drawing', this.definition.drawTime); }
+  owns(id: WeaponId) { return Object.hasOwn(WEAPONS, id) && (this.owned === null || this.owned.has(id)); }
+  /** null retains the unrestricted Free Range. Economy equipment comes from its authority. */
+  setOwnership(owned: readonly WeaponId[] | null) {
+    this.owned = owned === null ? null : new Set<WeaponId>(['knife', ...owned.filter(id => Object.hasOwn(WEAPONS, id))]);
+    const primary = (['rifle', 'smg', 'sniper'] as const).find(id => this.owns(id));
+    if (!this.owns(this.primaryId) && primary) this.primaryId = primary;
+    const lostActive = !this.owns(this.activeId);
+    const lostPending = this.pending !== null && !this.owns(this.pending);
+    if (lostActive || lostPending) {
+      this.pending = null;
+      if (lostActive) this.activeId = this.owns('pistol') ? 'pistol' : 'knife';
+      this.begin('ready', 0);
+    }
+  }
   equipSlot(slot: number) {
     const id = slot === 1 ? this.primaryId : slot === 2 ? 'pistol' : slot === 3 ? 'knife' : null;
     return id ? this.equip(id) : false;
   }
   equip(id: WeaponId) {
-    if (id === this.activeId || this.busy) return false;
+    if (!this.owns(id) || id === this.activeId || this.busy) return false;
     this.pending = id;
     this.begin('holstering', this.definition.holsterTime);
     return true;
   }
   selectPrimary(id: 'rifle' | 'smg' | 'sniper') {
-    if (this.busy) return false;
+    if (!this.owns(id) || WEAPONS[id]?.slot !== 1 || this.busy) return false;
     this.primaryId = id;
     // Selecting a loadout equips it but never replenishes its ammunition.
     return id === this.activeId || this.equip(id);
@@ -67,7 +82,7 @@ export class WeaponInventory {
     this.begin('inspecting', 1.6); return true;
   }
   fire() {
-    if (this.busy || this.cooldown > .00001) return false;
+    if (!this.owns(this.activeId) || this.busy || this.cooldown > .00001) return false;
     const w = this.definition;
     if (w.kind !== 'knife' && this.ammunition.magazine <= 0) return false;
     if (w.kind !== 'knife') this.ammunition.magazine--;
@@ -99,5 +114,6 @@ export class WeaponInventory {
     this.activeId = 'pistol'; this.pending = null;
     for (const id of Object.keys(this.cooldowns) as WeaponId[]) this.cooldowns[id] = 0;
     this.draw();
+    this.setOwnership(this.owned === null ? null : [...this.owned]);
   }
 }
