@@ -1,15 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowRight, ArrowUpRight, Check, ChevronRight, Crosshair, Expand, Flag, Headphones, MapPin, Menu, Mouse, Pause, RotateCcw, Settings2, Shield, Volume2, X } from 'lucide-react';
+import { ArrowDown, ArrowRight, ArrowUpRight, ChevronRight, Crosshair, Flag, MapPin, Menu, Mouse, Pause, RotateCcw, Settings2, Shield, X } from 'lucide-react';
 import { StrikeGame, INITIAL_HUD } from './game/game';
-import type { GameMode, GameSettings } from './game/game';
+import type { GameMode } from './game/game';
+import { loadSettings, saveSettings } from './game/settings';
+import type { GameSettings } from './game/settings';
+import SettingsPanel from './components/SettingsPanel';
 import TouchControls from './components/TouchControls';
-
-function loadSettings(): GameSettings {
-  try {
-    const saved = JSON.parse(localStorage.getItem('burma-strike-settings') || '{}');
-    return { sensitivity: Math.max(0.3, Math.min(2, Number(saved.sensitivity) || 1)), sound: saved.sound !== false, showFps: saved.showFps !== false };
-  } catch { return { sensitivity: 1, sound: true, showFps: true }; }
-}
 
 function Brand({ compact = false }: { compact?: boolean }) {
   return <div className={`brand ${compact ? 'compact' : ''}`}><span className="brand-mark"><span>B</span></span><span>BURMA<span className="brand-word">STRIKE</span></span></div>;
@@ -44,7 +40,7 @@ export default function App() {
   useEffect(() => { game.current?.setMode(mode); }, [mode]);
   useEffect(() => {
     game.current?.configure(settings);
-    try { localStorage.setItem('burma-strike-settings', JSON.stringify(settings)); } catch { /* Private browsing may disable storage. */ }
+    saveSettings(settings);
   }, [settings]);
 
   function play() {
@@ -97,21 +93,23 @@ export default function App() {
     {mode !== 'menu' && <>
       <div className="hud-top"><div className="range-label"><Crosshair size={18} /><div><strong>PRACTICE RANGE</strong><small>AEYAR FORTRESS</small></div></div><div className="range-score"><span>ELIMINATIONS <b>{String(hud.kills).padStart(2, '0')}</b></span><span>ACCURACY <b>{hud.shots ? Math.round(hud.hits / hud.shots * 100) : 0}%</b></span></div><button className="pause-button" onClick={() => setMode('paused')} aria-label="Pause game"><Pause size={18} /><span>ESC</span></button></div>
       {mode === 'playing' && <>
-        <div className="crosshair" aria-hidden="true"><i /><i /><i /><i /><b /></div>
+        <div className={`crosshair ${hud.ads ? 'aiming' : ''}`} aria-hidden="true"><i /><i /><i /><i /><b /></div>
+        {hud.ads && hud.weaponKind === 'sniper' && <div className="scope-overlay" aria-hidden="true"><div className="scope-reticle"><i /><b /></div></div>}
         {performance.now() - hud.hitAt < 230 && hud.hitAt > 0 && <div className={`hit-marker ${hud.headshot ? 'headshot' : ''}`}><X size={36} strokeWidth={1.5} />{hud.headshot && <small>HEADSHOT</small>}</div>}
-        {hud.reloading && <div className="reload-notice"><RotateCcw size={14} /> RELOADING</div>}
+        {hud.action !== 'ready' && <div className={`reload-notice action-${hud.action}`}>{hud.reloading && <RotateCcw size={14} />} {hud.action === 'holstering' || hud.action === 'drawing' ? 'SWITCHING WEAPON' : hud.action.toUpperCase()}</div>}
         {!touch && !hud.locked && <button className="capture-prompt" onClick={() => game.current?.input.requestPointerLock()}><Mouse size={17} /> CLICK TO CAPTURE MOUSE <span>ESC TO PAUSE</span></button>}
-        {touch && game.current && <TouchControls input={game.current.input} onShoot={() => game.current?.shoot()} onReload={() => game.current?.reload()} onJump={() => game.current?.jump()} />}
+        {touch && game.current && <TouchControls input={game.current.input} onShoot={() => game.current?.shoot()} onReload={() => game.current?.reload()} onJump={() => game.current?.jump()} onSlot={slot => game.current?.equipSlot(slot)} onInspect={() => game.current?.inspect()} onPrimaryCycle={() => game.current?.cyclePrimary()} slot={hud.slot} primaryName={hud.primaryId.toUpperCase()} />}
       </>}
-      <div className="hud-bottom"><div className="health"><Shield size={23} /><strong>{hud.health}</strong><div><span>HEALTH</span><i /></div></div><div className="weapon-readout"><div className="ammo"><strong className={hud.ammo <= 3 ? 'low-ammo' : ''}>{String(hud.ammo).padStart(2, '0')}</strong><span>/ {String(hud.reserve).padStart(2, '0')}</span></div><div><strong>KITE–12</strong><small>{hud.reserve === 0 && hud.ammo === 0 ? 'PAUSE → RESET RANGE TO RESUPPLY' : 'SEMI-AUTOMATIC · 9MM'}</small></div></div></div>
-      {!touch && <div className="control-strip"><span><kbd>W A S D</kbd> MOVE</span><span><kbd>R</kbd> RELOAD</span><span><kbd>SPACE</kbd> JUMP</span><span><kbd>LMB</kbd> FIRE</span></div>}
+      <div className="hud-bottom"><div className="health"><Shield size={23} /><strong>{hud.health}</strong><div><span>HEALTH</span><i /></div></div><div className="weapon-readout"><div className="ammo"><strong className={hud.weaponKind !== 'knife' && hud.ammo <= 3 ? 'low-ammo' : ''}>{hud.weaponKind === 'knife' ? '∞' : String(hud.ammo).padStart(2, '0')}</strong>{hud.weaponKind !== 'knife' && <span>/ {String(hud.reserve).padStart(2, '0')}</span>}</div><div><strong>{hud.weaponName}</strong><small>{hud.weaponKind !== 'knife' && hud.reserve === 0 && hud.ammo === 0 ? 'PAUSE → RESET RANGE TO RESUPPLY' : hud.weaponKind === 'knife' ? 'MELEE · CLOSE RANGE' : `${hud.weaponKind.toUpperCase()} · ${hud.ads ? 'ADS' : 'HIP FIRE'}`}</small></div></div></div>
+      {!touch && <div className="weapon-slot-strip" aria-label="Weapon inventory">{([{ slot: 1, label: hud.primaryId.toUpperCase() }, { slot: 2, label: 'PISTOL' }, { slot: 3, label: 'KNIFE' }] as const).map(item => <button key={item.slot} className={hud.slot === item.slot ? 'selected' : ''} onClick={() => game.current?.equipSlot(item.slot)} aria-label={`Equip ${item.label}`}><kbd>{item.slot}</kbd>{item.label}</button>)}<button disabled aria-label="Objective device not carried"><kbd>4</kbd>NO DEVICE</button></div>}
+      {!touch && <div className="control-strip"><span><kbd>W A S D</kbd> MOVE</span><span><kbd>R</kbd> RELOAD</span><span><kbd>SPACE</kbd> JUMP</span><span><kbd>LMB / RMB</kbd> FIRE / ADS</span><span><kbd>SHIFT</kbd> SPRINT</span><span><kbd>F</kbd> INSPECT</span></div>}
       {settings.showFps && <div className="fps-counter">{hud.fps} FPS <i /> LOCAL</div>}
     </>}
 
-    {mode === 'paused' && !dialog && <div className="modal-backdrop"><section className="dialog pause-dialog" role="dialog" aria-modal="true" aria-labelledby="pause-title"><span className="dialog-eyebrow">TAKE A BREATH</span><h2 id="pause-title">ON HOLD<span>.</span></h2><p>The fortress can wait. Your session is paused.</p><button className="solid-button" onClick={play}>RESUME PRACTICE <ArrowRight size={18} /></button><button className="outline-button" onClick={restart}><RotateCcw size={16} /> RESET RANGE & RESUPPLY</button><button className="outline-button" onClick={() => setDialog('settings')}><Settings2 size={16} /> SETTINGS</button><button className="text-button" onClick={backToMenu}>RETURN TO MAIN MENU</button></section></div>}
+    {mode === 'paused' && !dialog && <div className="modal-backdrop"><section className="dialog pause-dialog" role="dialog" aria-modal="true" aria-labelledby="pause-title"><span className="dialog-eyebrow">TAKE A BREATH</span><h2 id="pause-title">ON HOLD<span>.</span></h2><p>The fortress can wait. Your session is paused.</p><button className="solid-button" onClick={play}>RESUME PRACTICE <ArrowRight size={18} /></button><button className="outline-button" onClick={restart}><RotateCcw size={16} /> RESET RANGE & RESUPPLY</button><button className="outline-button" onClick={() => setDialog('settings')}><Settings2 size={16} /> SETTINGS</button><div className="practice-loadout"><span>PRACTICE PRIMARY <small>B TO CYCLE IN THE FIELD</small></span><div>{(['rifle', 'smg', 'sniper'] as const).map(id => <button key={id} aria-pressed={hud.primaryId === id} className={hud.primaryId === id ? 'selected' : ''} onClick={() => game.current?.selectPrimary(id)}>{id.toUpperCase()}</button>)}</div></div><button className="text-button" onClick={backToMenu}>RETURN TO MAIN MENU</button></section></div>}
 
-    {dialog && <div className="modal-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title"><button className="close-button" aria-label="Close dialog" onClick={() => setDialog(null)}><X size={20} /></button><span className="dialog-eyebrow">BURMA STRIKE / FIELD EQUIPMENT</span><h2 id="dialog-title">{dialog === 'settings' ? 'MAKE IT YOURS' : 'KNOW THE FIELD'}<span>.</span></h2>
-      {dialog === 'settings' ? <><p>Fine-tune your instincts. Settings save automatically.</p><label className="setting-row"><span><Mouse size={18} /> AIM SENSITIVITY</span><b>{settings.sensitivity.toFixed(1)}×</b></label><input aria-label="Aim sensitivity" type="range" min="0.3" max="2" step="0.1" value={settings.sensitivity} onChange={e => setSettings({...settings, sensitivity: Number(e.target.value)})} /><button className="setting-row" onClick={() => setSettings({...settings, sound: !settings.sound})}><span><Volume2 size={18} /> SOUND EFFECTS</span><span className={`toggle ${settings.sound ? 'on' : ''}`}>{settings.sound && <Check size={12} />}</span></button><button className="setting-row" onClick={() => setSettings({...settings, showFps: !settings.showFps})}><span><Expand size={18} /> FPS COUNTER</span><span className={`toggle ${settings.showFps ? 'on' : ''}`}>{settings.showFps && <Check size={12} />}</span></button><div className="dialog-tip"><Headphones size={17} /> Headphones recommended. Focus encouraged.</div></> : <><p>One sidearm. Three targets. Room to find your rhythm.</p><div className="guide-grid"><span>MOVE</span><kbd>W A S D</kbd><span>AIM / FIRE</span><kbd>MOUSE / LEFT CLICK</kbd><span>RELOAD / JUMP</span><kbd>R / SPACE</kbd><span>PAUSE</span><kbd>ESC</kbd></div><p className="guide-note">On mobile, play in landscape. Use the left stick to move, drag the right side to aim, and tap the action buttons.</p><div className="dialog-tip"><Crosshair size={18} /> Dummies have 100 HP. Body: 34 damage. Head: 100.<br />Targets respawn after 3 seconds. Reset the range to resupply.</div></>}
+    {dialog && <div className="modal-backdrop"><section className={`dialog ${dialog === 'settings' ? 'settings-dialog' : 'guide-dialog'}`} role="dialog" aria-modal="true" aria-labelledby="dialog-title"><button className="close-button" aria-label="Close dialog" onClick={() => setDialog(null)}><X size={20} /></button><span className="dialog-eyebrow">BURMA STRIKE / FIELD EQUIPMENT</span><h2 id="dialog-title">{dialog === 'settings' ? 'MAKE IT YOURS' : 'KNOW THE FIELD'}<span>.</span></h2>
+      {dialog === 'settings' ? <SettingsPanel settings={settings} onChange={setSettings} /> : <><p>A complete practice arsenal. Three targets. Room to find your rhythm.</p><div className="guide-grid"><span>MOVE</span><kbd>W A S D</kbd><span>AIM / FIRE</span><kbd>MOUSE / LEFT CLICK</kbd><span>RELOAD / JUMP</span><kbd>R / SPACE</kbd><span>WEAPON SLOTS</span><kbd>1 PRIMARY / 2 PISTOL / 3 KNIFE</kbd><span>PRIMARY / INSPECT</span><kbd>B CYCLE / F INSPECT</kbd><span>ADS / SPRINT</span><kbd>HOLD RIGHT MOUSE / SHIFT</kbd><span>PAUSE</span><kbd>ESC</kbd></div><p className="guide-note">On mobile, play in landscape. Use the left stick to move, drag the right side to aim, and use Fire, ADS, reload, jump, and weapon-slot buttons together.</p><div className="dialog-tip"><Crosshair size={18} /> Dummies have 100 HP. Damage, range, and fire rate vary by weapon.<br />Targets respawn after 3 seconds. Reset the range to resupply.</div></>}
       <button className="solid-button" onClick={() => setDialog(null)}>BACK TO {mode === 'menu' ? 'BASE' : 'PAUSE'} <ArrowRight size={18} /></button>
     </section></div>}
 

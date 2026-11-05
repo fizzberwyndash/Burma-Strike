@@ -3,11 +3,21 @@ export interface InputCallbacks {
   onShoot: () => void;
   onReload: () => void;
   onJump: () => void;
+  onSlot?: (slot: number) => void;
+  onPrimaryCycle?: () => void;
+  onInspect?: () => void;
+  onAds?: (active: boolean) => void;
 }
 
 /** Owns desktop events; touch UI feeds its independent pointers into this class. */
 export class GameInput {
-  public sensitivity = 1;
+  public sensitivity = 0.35;
+  public touchSensitivity = 1;
+  public aimMultiplier = 1;
+  public invertY = false;
+  public fireHeld = false;
+  public adsHeld = false;
+  public sprinting = false;
   public lookX = 0;
   public lookY = 0;
   public moveX = 0;
@@ -21,6 +31,7 @@ export class GameInput {
   private readonly keys = new Set<string>();
   private joystickX = 0;
   private joystickY = 0;
+  private touchSprinting = false;
 
   public constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -31,6 +42,8 @@ export class GameInput {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', this.onBlur);
+    window.addEventListener('pointerup', this.onPointerUp);
+    window.addEventListener('pointercancel', this.onPointerCancel);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     document.addEventListener('mousemove', this.onMouseMove);
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
@@ -57,8 +70,38 @@ export class GameInput {
 
   public touchLook(dx: number, dy: number): void {
     if (!this.active || !Number.isFinite(dx) || !Number.isFinite(dy)) return;
-    this.lookX += dx * this.sensitivity * 0.004;
-    this.lookY += dy * this.sensitivity * 0.004;
+    this.accumulateLook(dx, dy, this.touchSensitivity * 0.004);
+  }
+
+  /** Independent touch pointers call these without synthesizing mouse events. */
+  public touchTrigger(held: boolean): void {
+    if (!this.active) return;
+    const rising = held && !this.fireHeld;
+    this.fireHeld = held;
+    if (rising) this.callbacks.onShoot();
+  }
+
+  public touchAds(held: boolean): void {
+    if (!this.active && held) return;
+    this.setAds(held);
+  }
+
+  public touchSprint(held: boolean): void {
+    this.touchSprinting = this.active && held;
+    this.sprinting = this.touchSprinting || this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
+  }
+
+  private setAds(held: boolean): void {
+    if (this.adsHeld === held) return;
+    this.adsHeld = held;
+    this.callbacks.onAds?.(held);
+  }
+
+  private accumulateLook(dx: number, dy: number, scale: number): void {
+    if (![dx, dy, scale, this.aimMultiplier].every(Number.isFinite)) return;
+    // Pixel deltas already express distance; multiplying by frame time causes acceleration.
+    this.lookX += dx * scale * this.aimMultiplier;
+    this.lookY += dy * scale * this.aimMultiplier * (this.invertY ? -1 : 1);
   }
 
   public consumeLook(): { x: number; y: number } {
@@ -74,6 +117,7 @@ export class GameInput {
       this.moveY = 0;
       return;
     }
+    this.sprinting = this.touchSprinting || this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
     const right = this.keys.has('KeyD') || this.keys.has('ArrowRight');
     const left = this.keys.has('KeyA') || this.keys.has('ArrowLeft');
     const forward = this.keys.has('KeyW') || this.keys.has('ArrowUp');
@@ -104,6 +148,8 @@ export class GameInput {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
+    window.removeEventListener('pointerup', this.onPointerUp);
+    window.removeEventListener('pointercancel', this.onPointerCancel);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     document.removeEventListener('mousemove', this.onMouseMove);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
@@ -114,6 +160,10 @@ export class GameInput {
 
   private clearState(): void {
     this.keys.clear();
+    this.fireHeld = false;
+    this.setAds(false);
+    this.sprinting = false;
+    this.touchSprinting = false;
     this.moveX = 0;
     this.moveY = 0;
     this.joystickX = 0;
@@ -132,7 +182,7 @@ export class GameInput {
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (!this.active) return;
     const code = event.code;
-    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'KeyR', 'Escape'].includes(code)) {
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'KeyR', 'Escape', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'KeyB', 'KeyF', 'ShiftLeft', 'ShiftRight'].includes(code)) {
       event.preventDefault();
     }
     if (code === 'Escape') {
@@ -144,6 +194,9 @@ export class GameInput {
     if (event.repeat) return;
     if (code === 'KeyR') this.callbacks.onReload();
     if (code === 'Space') this.callbacks.onJump();
+    if (/^Digit[1-4]$/.test(code)) this.callbacks.onSlot?.(Number(code.slice(-1)));
+    if (code === 'KeyB') this.callbacks.onPrimaryCycle?.();
+    if (code === 'KeyF') this.callbacks.onInspect?.();
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
@@ -152,17 +205,31 @@ export class GameInput {
 
   private readonly onMouseMove = (event: MouseEvent): void => {
     if (!this.active || document.pointerLockElement !== this.canvas) return;
-    this.lookX += event.movementX * this.sensitivity * 0.002;
-    this.lookY += event.movementY * this.sensitivity * 0.002;
+    this.accumulateLook(event.movementX, event.movementY, this.sensitivity * 0.002);
   };
 
   private readonly onPointerDown = (event: PointerEvent): void => {
-    if (!this.active || event.button !== 0 || event.pointerType === 'touch') return;
+    if (!this.active || (event.button !== 0 && event.button !== 2) || event.pointerType === 'touch') return;
     if (document.pointerLockElement !== this.canvas) {
       this.requestPointerLock();
       return;
     }
-    this.callbacks.onShoot();
+    event.preventDefault();
+    if (event.button === 0) this.touchTrigger(true);
+    if (event.button === 2) this.setAds(true);
+  };
+
+  private readonly onPointerUp = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch') return;
+    if (event.button === 0) this.fireHeld = false;
+    if (event.button === 2) this.setAds(false);
+  };
+
+  private readonly onPointerCancel = (event: PointerEvent): void => {
+    if (event.pointerType !== 'touch') {
+      this.fireHeld = false;
+      this.setAds(false);
+    }
   };
 
   private readonly onPointerLockChange = (): void => {

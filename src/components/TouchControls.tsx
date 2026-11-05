@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
-import { ArrowUp, Crosshair, RotateCw } from 'lucide-react';
+import { ArrowUp, Crosshair, RotateCw, ScanLine, Footprints, Search } from 'lucide-react';
 import type { GameInput } from '../game/input';
 
 interface TouchControlsProps {
@@ -7,12 +7,22 @@ interface TouchControlsProps {
   onShoot: () => void;
   onReload: () => void;
   onJump: () => void;
+  onSlot?: (slot: number) => void;
+  onInspect?: () => void;
+  onPrimaryCycle?: () => void;
+  slot?: number;
+  primaryName?: string;
 }
 
 /** Each control owns its pointer, allowing movement, aiming and firing together. */
-export default function TouchControls({ input, onShoot, onReload, onJump }: TouchControlsProps) {
+export default function TouchControls({ input, onReload, onJump, onSlot, onInspect, onPrimaryCycle, slot = 2, primaryName = 'RIFLE' }: TouchControlsProps) {
   const movePointer = useRef<number | null>(null);
   const aimPointer = useRef<number | null>(null);
+  const firePointer = useRef<number | null>(null);
+  const adsPointer = useRef<number | null>(null);
+  const sprintPointer = useRef<number | null>(null);
+  const [ads, setAds] = useState(false);
+  const [sprinting, setSprinting] = useState(false);
   const aimPosition = useRef({ x: 0, y: 0 });
   const [knob, setKnob] = useState({ x: 0, y: 0 });
 
@@ -20,6 +30,9 @@ export default function TouchControls({ input, onShoot, onReload, onJump }: Touc
     movePointer.current = null;
     aimPointer.current = null;
     input.touchMove(0, 0);
+    input.touchTrigger(false);
+    input.touchAds(false);
+    input.touchSprint(false);
   }, [input]);
 
   function moveJoystick(event: PointerEvent<HTMLDivElement>) {
@@ -85,6 +98,28 @@ export default function TouchControls({ input, onShoot, onReload, onJump }: Touc
     callback();
   }
 
+  type HeldAction = 'fire' | 'ads' | 'sprint';
+  function heldAction(event: PointerEvent<HTMLButtonElement>, kind: HeldAction, held: boolean) {
+    const pointer = kind === 'fire' ? firePointer : kind === 'ads' ? adsPointer : sprintPointer;
+    if (held && pointer.current !== null) return;
+    if (!held && pointer.current !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    pointer.current = held ? event.pointerId : null;
+    if (held) event.currentTarget.setPointerCapture(event.pointerId);
+    else if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (kind === 'fire') input.touchTrigger(held);
+    if (kind === 'ads') { input.touchAds(held); setAds(held); }
+    if (kind === 'sprint') { input.touchSprint(held); setSprinting(held); }
+  }
+
+  const holdHandlers = (kind: HeldAction) => ({
+    onPointerDown: (event: PointerEvent<HTMLButtonElement>) => heldAction(event, kind, true),
+    onPointerUp: (event: PointerEvent<HTMLButtonElement>) => heldAction(event, kind, false),
+    onPointerCancel: (event: PointerEvent<HTMLButtonElement>) => heldAction(event, kind, false),
+    onLostPointerCapture: (event: PointerEvent<HTMLButtonElement>) => heldAction(event, kind, false),
+  });
+
   return (
     <div className="touch-controls" style={{ touchAction: 'none' }} onContextMenu={event => event.preventDefault()}>
       <div
@@ -110,10 +145,23 @@ export default function TouchControls({ input, onShoot, onReload, onJump }: Touc
       >
         <div className="joystick-knob" style={{ transform: `translate(${knob.x}px, ${knob.y}px)` }} />
       </div>
-      <button className="touch-button shoot" type="button" aria-label="Shoot" style={{ touchAction: 'none' }} onPointerDown={event => action(event, onShoot)}>
+      <button className="touch-button shoot" type="button" aria-label="Shoot" style={{ touchAction: 'none' }} {...holdHandlers('fire')}>
         <Crosshair aria-hidden="true" size={28} />
         <span>FIRE</span>
       </button>
+      <button className={`touch-button ads ${ads ? 'held' : ''}`} type="button" aria-label="Aim down sights" aria-pressed={ads} {...holdHandlers('ads')}>
+        <ScanLine aria-hidden="true" size={22} /><span>ADS</span>
+      </button>
+      <button className={`touch-button sprint ${sprinting ? 'held' : ''}`} type="button" aria-label="Sprint" aria-pressed={sprinting} {...holdHandlers('sprint')}>
+        <Footprints aria-hidden="true" size={21} /><span>SPRINT</span>
+      </button>
+      <div className="touch-weapon-slots" aria-label="Weapon inventory">
+        {[1, 2, 3].map(value => <button type="button" key={value} className={slot === value ? 'active' : ''} aria-label={`Equip slot ${value}`} aria-pressed={slot === value} onPointerDown={event => action(event, () => onSlot?.(value))}>
+          <b>{value}</b><span>{value === 1 ? primaryName : value === 2 ? 'PISTOL' : 'KNIFE'}</span>
+        </button>)}
+        <button type="button" className="touch-primary-cycle" aria-label="Change primary weapon" onPointerDown={event => action(event, () => onPrimaryCycle?.())}><RotateCw size={13} /><span>LOADOUT</span></button>
+        <button type="button" className="touch-inspect" aria-label="Inspect weapon" onPointerDown={event => action(event, () => onInspect?.())}><Search size={14} /><span>INSPECT</span></button>
+      </div>
       <button className="touch-button reload" type="button" aria-label="Reload" style={{ touchAction: 'none' }} onPointerDown={event => action(event, onReload)}>
         <RotateCw aria-hidden="true" size={21} />
         <span>RELOAD</span>
