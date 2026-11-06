@@ -22,6 +22,8 @@ import { ObjectiveSession } from './objectiveSession';
 import { OBJECTIVE_SITES } from './objective';
 import type { ObjectiveConfig, ObjectiveSnapshot, ObjectiveCommand } from './objective';
 import { ObjectiveView } from './objectiveView';
+import { GraphicsController } from './graphics';
+import { EnvironmentAudio } from './environmentAudio';
 export type { GameSettings } from './settings';
 
 export type GameMode = 'menu' | 'playing' | 'paused';
@@ -37,6 +39,7 @@ export interface HudState {
   objective: ObjectiveSnapshot | null; controlledId: string; objectiveEquipped: boolean;
   interactHeld: boolean; scoreboard: boolean; canInteract: boolean; interactLabel: string;
   playerPosition: {x:number;y:number;z:number};
+  location: string; graphicsQuality: 'low' | 'medium' | 'high'; renderScale: number; targetFps: 30 | 60;
 }
 export const INITIAL_HUD: HudState = {
   ammo: 12, reserve: 48, health: 100, kills: 0, shots: 0, hits: 0,
@@ -46,6 +49,7 @@ export const INITIAL_HUD: HudState = {
   armor: 0, armorType: null, credits: 800, economyMode: false, phase: 'buy', round: 1, economy: null,
   objective: null, controlledId: 'attacker-1', objectiveEquipped: false, interactHeld: false,
   scoreboard:false, canInteract:false, interactLabel:'', playerPosition:{x:0,y:1,z:-12},
+  location:'ATTACKER SPAWN', graphicsQuality:'high', renderScale:1, targetFps:60,
 };
 
 /** Owns the existing Practice scene. Input, inventory and presentation have separate lifetimes. */
@@ -82,6 +86,8 @@ export class StrikeGame {
   private deviceEquipped = false;
   private objectiveSequence = 0;
   private objectivePhaseKey = '';
+  private graphics: GraphicsController;
+  private environmentAudio: EnvironmentAudio;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -89,9 +95,11 @@ export class StrikeGame {
     onPause: () => void,
     settings: GameSettings,
     private onShop: (open: boolean) => void = () => {},
+    private onLoading: (progress: number, label: string) => void = () => {},
   ) {
+    this.onLoading(.1, 'Preparing renderer');
     this.engine = new Engine(canvas, true, { stencil: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
-    this.engine.setHardwareScalingLevel(Math.max(1, window.devicePixelRatio / 1.5));
+    this.graphics = new GraphicsController(this.engine, window.matchMedia('(pointer: coarse)').matches, window.devicePixelRatio);
     this.scene = new Scene(this.engine);
     this.scene.collisionsEnabled = true;
     this.camera = new FreeCamera('player-camera', new Vector3(20, 10, -22), this.scene);
@@ -99,6 +107,7 @@ export class StrikeGame {
     this.camera.minZ = 0.05;
     this.camera.maxZ = 250;
     this.camera.fovMode = Camera.FOVMODE_HORIZONTAL_FIXED;
+    this.onLoading(.45, 'Building Bagan Old City');
     this.map = buildMap(this.scene);
     this.player = MeshBuilder.CreateBox('player-collider', { width: 0.64, height: 1.7, depth: 0.64 }, this.scene);
     this.player.isVisible = false;
@@ -117,10 +126,17 @@ export class StrikeGame {
       onShop: () => this.shopOpen ? this.closeShop() : this.openShop(),
       onInteract: held => this.interact(held), onScoreboard: held => this.showScoreboard(held),
     });
+    // Register ambience gestures only after the renderer and scene exist.
+    // A rejected WebGL startup must not leave document listeners behind.
+    this.environmentAudio = new EnvironmentAudio();
     this.configure(settings);
     this.camera.fov = this.settings.fov * Math.PI / 180;
     window.addEventListener('resize', this.resize);
     this.engine.runRenderLoop(this.frame);
+    this.onLoading(.8, 'Preparing shaders');
+    void this.scene.whenReadyAsync().then(() => {
+      if (!this.disposed) this.onLoading(1, 'Ready');
+    }).catch(() => { if (!this.disposed) this.onLoading(-1, 'Renderer unavailable'); });
   }
 
   configure(settings: GameSettings) {
@@ -129,6 +145,8 @@ export class StrikeGame {
     this.input.touchSensitivity = this.settings.touchSensitivity;
     this.input.invertY = this.settings.invertY;
     this.audio.enabled = this.settings.sound;
+    this.environmentAudio.configure(this.settings.sound);
+    if (this.graphics.configure(this.settings)) this.map.configureQuality(this.graphics.quality);
     this.refreshAim();
     if (this.mode !== 'playing') this.camera.fov = this.settings.fov * Math.PI / 180;
   }
@@ -237,11 +255,12 @@ export class StrikeGame {
     this.resetPosition(); this.resetTargets(); this.updateCamera();
     // This may be called from the main menu; setMode('playing') respects the open shop.
     this.shopOpen = true; this.input.shopOpen = true; this.input.active = false;
-    this.input.releasePointerLock(); this.onShop(true); this.emitHud();
+    this.input.releasePointerLock(); this.onShop(true); this.environmentAudio.shop(true); this.emitHud();
   }
 
   openShop() {
     if (this.mode === 'menu') return;
+    if (!this.shopOpen) this.environmentAudio.shop(true);
     this.shopOpen = true; this.input.shopOpen = true; this.input.active = false;
     this.state.ads = false; this.state.sprinting = false;
     this.velocity.setAll(0); this.jumpBuffer = 0;
@@ -249,6 +268,7 @@ export class StrikeGame {
   }
 
   closeShop() {
+    if (this.shopOpen) this.environmentAudio.shop(false);
     this.shopOpen = false; this.input.shopOpen = false;
     this.input.active = this.mode === 'playing' && this.objectivePhaseAllowsInput();
     this.onShop(false);
@@ -292,12 +312,13 @@ export class StrikeGame {
   startRound() {
     if (this.objectiveSession) return; // Objective buy phase is timed by its authority.
     if (this.economyCommand({type:'start-round'})?.ok) {
+      this.environmentAudio.roundStart();
       this.resetPosition(); this.updateCamera(); this.closeShop();
     }
   }
   finishRound(outcome: 'win' | 'loss') {
     if (this.objectiveSession) return;
-    if (this.economyCommand({type:'finish-round', outcome})?.ok) this.openShop();
+    if (this.economyCommand({type:'finish-round', outcome})?.ok) { this.environmentAudio.victory(outcome === 'win'); this.openShop(); }
   }
   newRound() {
     if (this.objectiveSession) { this.nextObjectiveRound(); return; }
@@ -333,7 +354,7 @@ export class StrikeGame {
     this.inventory = this.objectiveSession.inventoryFor(this.controlledId);
     this.resetPosition(); this.objectivePhaseChanged();
     this.shopOpen = true; this.input.shopOpen = true; this.input.active = false;
-    this.input.releasePointerLock(); this.onShop(true); this.emitHud();
+    this.input.releasePointerLock(); this.onShop(true); this.environmentAudio.shop(true); this.emitHud();
   }
   configureObjective(config: Partial<ObjectiveConfig>) { this.startObjectiveSandbox(config); }
 
@@ -451,8 +472,13 @@ export class StrikeGame {
       for (const target of this.map.targets) target.root.setEnabled(false);
       if (this.mode !== 'menu') this.openShop();
     } else if (s.phase === 'combat') {
+      this.environmentAudio.roundStart();
       this.closeShop();
     } else if (s.phase === 'result' || s.phase === 'transition') {
+      if (s.phase === 'result' && s.result) {
+        const controlled = s.players.find(p => p.id === this.controlledId);
+        this.environmentAudio.victory(s.result.winner === controlled?.team);
+      }
       this.shopOpen = false; this.input.shopOpen = false; this.onShop(false);
       this.input.active = false; this.input.shopEnabled = false; this.input.releasePointerLock();
       this.state.ads = false; this.state.sprinting = false; this.velocity.setAll(0);
@@ -606,6 +632,7 @@ export class StrikeGame {
     const elapsed = Math.max(0, this.engine.getDeltaTime() / 1000);
     const dt = Math.min(elapsed, .25);
     let look = {x:0, y:0};
+    let travelSpeed = 0;
     if (this.mode !== 'paused') this.time += dt;
     this.map.animate(this.time);
     if (this.mode === 'menu') {
@@ -624,7 +651,9 @@ export class StrikeGame {
       this.yaw += look.x;
       this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch + look.y));
       const steps = Math.max(1, Math.ceil(dt / .016));
+      const beforeX = this.player.position.x, beforeZ = this.player.position.z;
       if (movementEnabled) for (let i = 0; i < steps; i++) this.move(dt / steps);
+      travelSpeed = Math.hypot(this.player.position.x-beforeX, this.player.position.z-beforeZ) / Math.max(.0001, dt);
       if (this.player.position.y < -5) this.restart();
       this.updateCamera();
       if (this.objectiveSession) {
@@ -649,7 +678,13 @@ export class StrikeGame {
     this.effects.update(this.mode === 'paused' ? 0 : dt);
     this.objectiveView.update(this.mode === 'paused' ? 0 : dt, this.mode === 'menu' ? null : this.objectiveSession?.snapshot ?? null,
       this.controlledId, this.deviceEquipped, this.settings.sound);
-    this.scene.render();
+    const environmentActive = this.mode === 'playing' && !this.shopOpen && this.objectivePhaseAllowsInput();
+    this.environmentAudio.update(dt, {
+      active:environmentActive,
+      speed:travelSpeed, sprinting:this.state.sprinting,
+      grounded:environmentActive && travelSpeed > .2 && this.grounded(), surface:this.map.surfaceAt(this.player.position), position:this.player.position,
+    });
+    if (this.graphics.shouldRender(elapsed)) this.scene.render();
     this.hudTimer += dt;
     if (this.hudTimer > .08) { this.emitHud(); this.hudTimer = 0; }
   };
@@ -665,7 +700,7 @@ export class StrikeGame {
     const eligibility = this.objectiveEligibility();
     Object.assign(this.state, { ammo:a.magazine, reserve:a.reserve, weaponId:w.id, weaponName:w.name,
       weaponKind:w.kind, slot:w.slot, primaryId:this.inventory.primaryId, action:this.inventory.action,
-      reloading:this.inventory.action === 'reloading', fps:Math.round(this.engine.getFps()),
+      reloading:this.inventory.action === 'reloading', fps:this.graphics.fps,
       locked:document.pointerLockElement === this.canvas, economy,
       economyMode:!!economy, credits:economy?.credits ?? 800,
       health:economy?.health ?? 100, armor:economy?.armor ?? 0, armorType:economy?.armorType ?? null,
@@ -673,7 +708,9 @@ export class StrikeGame {
       objective, controlledId:this.controlledId, objectiveEquipped:this.deviceEquipped,
       interactHeld:this.input.interactHeld, scoreboard:this.state.scoreboard,
       canInteract:eligibility.eligible, interactLabel:eligibility.label,
-      playerPosition:{x:this.player.position.x,y:this.player.position.y,z:this.player.position.z} });
+      playerPosition:{x:this.player.position.x,y:this.player.position.y,z:this.player.position.z},
+      location:this.map.locationAt(this.player.position), graphicsQuality:this.graphics.quality,
+      renderScale:this.graphics.renderScale, targetFps:this.graphics.targetFps });
     if (this.deviceEquipped) Object.assign(this.state, {weaponName:'ROYAL SIGNAL CORE',weaponKind:'objective',slot:4,ammo:0,reserve:0});
     this.onHud({ ...this.state });
   }
@@ -683,7 +720,7 @@ export class StrikeGame {
     this.disposed = true;
     this.engine.stopRenderLoop(this.frame);
     window.removeEventListener('resize', this.resize);
-    this.input.dispose(); this.effects.dispose(); this.objectiveView.dispose(); this.weapon.dispose(); this.audio.dispose();
+    this.input.dispose(); this.effects.dispose(); this.objectiveView.dispose(); this.weapon.dispose(); this.audio.dispose(); this.environmentAudio.dispose();
     this.map.dispose(); this.scene.dispose(); this.engine.dispose();
   }
 }

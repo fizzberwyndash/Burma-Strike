@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import { ArrowUp, Crosshair, RotateCw, ScanLine, Footprints, Search } from 'lucide-react';
 import type { GameInput } from '../game/input';
+import { useI18n } from '../i18n';
 
 interface TouchControlsProps {
   input: GameInput;
@@ -17,6 +18,7 @@ interface TouchControlsProps {
 
 /** Each control owns its pointer, allowing movement, aiming and firing together. */
 export default function TouchControls({ input, onReload, onJump, onSlot, onInspect, onPrimaryCycle, slot = 2, primaryName = 'RIFLE', ownedSlots }: TouchControlsProps) {
+  const { t } = useI18n();
   const movePointer = useRef<number | null>(null);
   const aimPointer = useRef<number | null>(null);
   const firePointer = useRef<number | null>(null);
@@ -125,7 +127,7 @@ export default function TouchControls({ input, onReload, onJump, onSlot, onInspe
     <div className="touch-controls" style={{ touchAction: 'none' }} onContextMenu={event => event.preventDefault()}>
       <div
         className="touch-aim-zone"
-        aria-label="Drag to aim"
+        aria-label={t('Drag to aim')}
         style={{ touchAction: 'none' }}
         onPointerDown={startAim}
         onPointerMove={moveAim}
@@ -136,7 +138,7 @@ export default function TouchControls({ input, onReload, onJump, onSlot, onInspe
       <div
         className="joystick"
         role="group"
-        aria-label="Movement joystick"
+        aria-label={t('Movement joystick')}
         style={{ touchAction: 'none' }}
         onPointerDown={startJoystick}
         onPointerMove={moveJoystick}
@@ -146,30 +148,30 @@ export default function TouchControls({ input, onReload, onJump, onSlot, onInspe
       >
         <div className="joystick-knob" style={{ transform: `translate(${knob.x}px, ${knob.y}px)` }} />
       </div>
-      <button className="touch-button shoot" type="button" aria-label="Shoot" style={{ touchAction: 'none' }} {...holdHandlers('fire')}>
+      <button className="touch-button shoot" type="button" aria-label={t('Shoot')} style={{ touchAction: 'none' }} {...holdHandlers('fire')}>
         <Crosshair aria-hidden="true" size={28} />
-        <span>FIRE</span>
+        <span>{t('FIRE')}</span>
       </button>
-      <button className={`touch-button ads ${ads ? 'held' : ''}`} type="button" aria-label="Aim down sights" aria-pressed={ads} {...holdHandlers('ads')}>
-        <ScanLine aria-hidden="true" size={22} /><span>ADS</span>
+      <button className={`touch-button ads ${ads ? 'held' : ''}`} type="button" aria-label={t('Aim down sights')} aria-pressed={ads} {...holdHandlers('ads')}>
+        <ScanLine aria-hidden="true" size={22} /><span>{t('ADS')}</span>
       </button>
-      <button className={`touch-button sprint ${sprinting ? 'held' : ''}`} type="button" aria-label="Sprint" aria-pressed={sprinting} {...holdHandlers('sprint')}>
-        <Footprints aria-hidden="true" size={21} /><span>SPRINT</span>
+      <button className={`touch-button sprint ${sprinting ? 'held' : ''}`} type="button" aria-label={t('Sprint')} aria-pressed={sprinting} {...holdHandlers('sprint')}>
+        <Footprints aria-hidden="true" size={21} /><span>{t('SPRINT')}</span>
       </button>
-      <div className="touch-weapon-slots" aria-label="Weapon inventory">
-        {[1, 2, 3].map(value => <button type="button" key={value} className={slot === value ? 'active' : ''} aria-label={`Equip slot ${value}`} aria-pressed={slot === value} disabled={ownedSlots !== undefined && !ownedSlots.includes(value)} onPointerDown={event => action(event, () => onSlot?.(value))}>
-          <b>{value}</b><span>{value === 1 ? primaryName : value === 2 ? 'PISTOL' : 'KNIFE'}</span>
+      <div className="touch-weapon-slots" aria-label={t('Weapon inventory')}>
+        {[1, 2, 3].map(value => <button type="button" key={value} className={slot === value ? 'active' : ''} aria-label={t('Equip slot {slot}', { slot: value })} aria-pressed={slot === value} disabled={ownedSlots !== undefined && !ownedSlots.includes(value)} onPointerDown={event => action(event, () => onSlot?.(value))}>
+          <b>{value}</b><span>{t(value === 1 ? primaryName : value === 2 ? 'PISTOL' : 'KNIFE')}</span>
         </button>)}
-        <button type="button" className="touch-primary-cycle" aria-label="Change primary weapon" onPointerDown={event => action(event, () => onPrimaryCycle?.())}><RotateCw size={13} /><span>LOADOUT</span></button>
-        <button type="button" className="touch-inspect" aria-label="Inspect weapon" aria-keyshortcuts="V" title="Inspect weapon (V)" onPointerDown={event => action(event, () => onInspect?.())}><Search size={14} /><span>INSPECT</span></button>
+        <button type="button" className="touch-primary-cycle" aria-label={t('Change primary weapon')} onPointerDown={event => action(event, () => onPrimaryCycle?.())}><RotateCw size={13} /><span>{t('LOADOUT')}</span></button>
+        <button type="button" className="touch-inspect" aria-label={t('Inspect weapon')} aria-keyshortcuts="V" title={t('Inspect weapon (V)')} onPointerDown={event => action(event, () => onInspect?.())}><Search size={14} /><span>{t('INSPECT')}</span></button>
       </div>
-      <button className="touch-button reload" type="button" aria-label="Reload" style={{ touchAction: 'none' }} onPointerDown={event => action(event, onReload)}>
+      <button className="touch-button reload" type="button" aria-label={t('Reload')} style={{ touchAction: 'none' }} onPointerDown={event => action(event, onReload)}>
         <RotateCw aria-hidden="true" size={21} />
-        <span>RELOAD</span>
+        <span>{t('RELOAD')}</span>
       </button>
-      <button className="touch-button jump" type="button" aria-label="Jump" style={{ touchAction: 'none' }} onPointerDown={event => action(event, onJump)}>
+      <button className="touch-button jump" type="button" aria-label={t('Jump')} style={{ touchAction: 'none' }} onPointerDown={event => action(event, onJump)}>
         <ArrowUp aria-hidden="true" size={23} />
-        <span>JUMP</span>
+        <span>{t('JUMP')}</span>
       </button>
     </div>
   );

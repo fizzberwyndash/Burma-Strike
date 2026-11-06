@@ -8,6 +8,10 @@ export interface GameSettings {
   headBob: boolean;
   sound: boolean;
   showFps: boolean;
+  language: 'en' | 'my';
+  graphics: 'auto' | 'low' | 'medium' | 'high';
+  targetFps: 30 | 60;
+  adaptiveResolution: boolean;
 }
 
 export const SETTINGS_KEY = 'burma-strike-settings';
@@ -21,6 +25,10 @@ export const DEFAULT_SETTINGS: GameSettings = {
   headBob: false,
   sound: true,
   showFps: true,
+  language: 'en',
+  graphics: 'auto',
+  targetFps: 60,
+  adaptiveResolution: true,
 };
 
 /** Accept legacy settings while rejecting malformed storage and nonfinite values. */
@@ -41,6 +49,10 @@ export function normalizeSettings(value: unknown): GameSettings {
     fov: numeric('fov', 70, 110),
     invertY: boolean('invertY'), headBob: boolean('headBob'),
     sound: boolean('sound'), showFps: boolean('showFps'),
+    language: saved.language === 'my' ? 'my' : 'en',
+    graphics: saved.graphics === 'low' || saved.graphics === 'medium' || saved.graphics === 'high' ? saved.graphics : 'auto',
+    targetFps: saved.targetFps === 30 ? 30 : 60,
+    adaptiveResolution: boolean('adaptiveResolution'),
   };
 }
 

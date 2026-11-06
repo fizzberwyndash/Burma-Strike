@@ -1,6 +1,6 @@
 # BURMA STRIKE
 
-An original, single-player first-person browser practice range built with React, TypeScript, Vite, and Babylon.js. The fictional Aeyar Fortress uses procedural Bagan-inspired architecture, materials, targets, and weapon geometry. No external models, copied maps, accounts, or multiplayer services.
+An original, single-player first-person browser practice range built with React, TypeScript, Vite, and Babylon.js. **Bagan Old City** is a fictional fortified town with procedural Bagan-inspired architecture, materials, targets, and weapon geometry. No external models, copied maps, accounts, or multiplayer services.
 
 ## Run locally
 
@@ -13,6 +13,8 @@ npm run dev
 ```
 
 Open `http://localhost:5173` in a current Chrome, Edge, Firefox, or Safari with WebGL enabled. Click **Play Practice**, allow mouse capture, and click the game canvas if the browser asks for another capture gesture.
+
+On Windows PowerShell, use `npm.cmd ci` and `npm.cmd run dev` if script policy blocks `npm.ps1`. Run these commands in the folder containing this project's `package.json` and `src/App.tsx`. Open the exact root URL printed by Vite; if another server owns 5173, Vite may choose a different port. A stock Vite starter page means that server is running a different project or an older copy of the files.
 
 For a production check:
 
@@ -190,3 +192,27 @@ Interaction commands contain an ID, displayed round, monotonic epoch and intent 
 Desktop Chromium and emulated mobile were additionally checked through the actual UI and game with natural buy/plant/defuse timings. Real network disconnection, latency/reordering over an actual transport, real phones, other browser engines and audible sound quality were not tested. Rule-level message/disconnect cases were tested without claiming a working multiplayer connection.
 
 New modules: `src/game/objective.ts`, `objectiveSession.ts`, `objectiveView.ts`, `src/components/ObjectiveHud.tsx`, and `tests/objective*.test.mjs`. Existing game, shop, economy, HUD and input integrate the mode while retaining the earlier Free Range and Economy Drill workflows.
+
+## Bagan Old City, language and atmosphere
+
+The playable map is an original secular fortified town, with terracotta brick and weathered stucco, layered arches, vaulted gates, wooden houses, cloth market awnings, pots, woven baskets, planting and geometric civic decoration. Sandstone paving distinguishes the central courtyard and market court; timber decks identify the eastern passage. Distant heritage-inspired silhouettes are outside the sealed playable perimeter, noninteractive and non-destructible. No real sacred building is used as a combat space.
+
+Three lanes connect the existing Attacker and Defender spawns: **Market Walk → A / Market Court**, **Central Courtyard**, and **Timber Passage → B / Timber Yard**. Their junctions provide alternative rotations and cover. A central wagon screens the direct spawn-to-spawn sightline. Named HUD callouts identify each area. Existing objective site positions and all three practice targets remain compatible with earlier rules. `MAP_ROUTES` in `map.ts` documents the six spawn-to-site/center navigation routes for collision verification.
+
+Open **Settings → Language** to choose English or မြန်မာ. Menus, settings, weapon shop, health/armor, weapon actions, round phases, objective progress/results, scoreboard and local sandbox controls update immediately and remember the selection. Original weapon/brand names and physical key labels retain their identity. The bundled Noto Sans Myanmar regular/bold fonts load locally and include their font license in `src/assets/fonts/LICENSE-Noto.txt`; no font CDN is required. Myanmar translations have automated coverage and browser layout checks, but still need a native Burmese speaker's editorial review.
+
+The **Rooms** panel includes translated creation/joining labels and explicitly shows that no server is connected. Those online actions are disabled; this update does not introduce multiplayer or pretend that local stand-ins are online players.
+
+Settings also provide **Auto / Low / Medium / High graphics**, **30 / 60 FPS render targets**, and **adaptive resolution**. Auto chooses Medium for coarse-pointer devices and High for desktop. Low removes shadows and small decorative details; Medium uses 512px shadows, High 1024px. Collision, bullet obstruction, objective sites and route geometry stay identical across tiers. Adaptive resolution reduces pixel count under a sustained render shortfall and cautiously restores it after healthy samples. The FPS HUD displays measured rendering rate, quality and resolution percentage. These are scalable budgets, not a promise of a particular frame rate on untested devices.
+
+Graphics and language changes update the existing Babylon scene instead of recreating it. The 30 FPS option limits rendering while input, movement and objective rules continue on the game loop. A loading progress indicator waits for scene readiness before enabling Practice, Economy Drill or Royal Signal Core.
+
+Enable **Sound effects** for synthesized wind, market wood/cloth ambience, surface-specific sand/stone/wood footsteps, shop chimes and round cues. Audio starts only after a browser-approved user gesture, pauses with gameplay, obeys the sound setting and disposes its nodes/context/listeners. Footsteps use actual collision-resolved horizontal movement, so pushing into a wall or jumping does not produce walking steps. Shop open/close, round start and victory have short UI transitions; reduced-motion preferences suppress decorative transitions.
+
+All new environment art, textures, cloth and equipment visuals are procedural placeholders. Ambience/foley are original synthesized placeholders, not field recordings or voice performances. No authored GLB models, recorded Burmese market sound, music or professional texture assets are included.
+
+### Art and localization checks
+
+`npm test` includes graphics-budget/adaptive-resolution tests and Myanmar dictionary/template/fallback tests, in addition to all existing inventory, input, economy and objective rules. Browser checks cover all six navigation routes and four perimeter walls at every graphics tier, practice-target ray visibility, identical collision geometry, skyline isolation, font loading, language persistence and settings changes without scene recreation. Desktop and landscape touchscreen paths are checked with Chromium emulation. Physical mobile performance, Safari/Firefox rendering, native-language wording and human listening quality still require device/editorial testing.
+
+New modules are `src/i18n.tsx`, `i18nCore.ts`, `locales/common.ts`, `locales/gameplay.ts`, `game/graphics.ts` and `game/environmentAudio.ts`. `App.tsx`, settings/shop/objective/touch components and `styles.css` apply the translated visual theme; `game.ts` and `map.ts` integrate quality, callouts, ambience and original environment geometry. The existing arsenal, input, economy and objective rule modules remain the gameplay authorities.

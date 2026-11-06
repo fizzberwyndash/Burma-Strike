@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "node --test tests/gameplay.test.mjs tests/input.test.mjs tests/economy.test.mjs tests/objective.test.mjs tests/objective-session.test.mjs"
+    "test": "node --test tests/gameplay.test.mjs tests/input.test.mjs tests/economy.test.mjs tests/objective.test.mjs tests/objective-session.test.mjs tests/graphics.test.mjs tests/localization.test.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "^8.0.0",
