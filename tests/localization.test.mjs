@@ -22,10 +22,11 @@ const moduleAt = async path => import(await sourceUrl(new URL(path, import.meta.
 const { translate } = await moduleAt('../src/i18nCore.ts');
 const { commonTranslations } = await moduleAt('../src/locales/common.ts');
 const { gameplayTranslations } = await moduleAt('../src/locales/gameplay.ts');
+const { multiplayerTranslations } = await moduleAt('../src/locales/multiplayer.ts');
 const { SHOP_ITEMS } = await moduleAt('../src/game/catalog.ts');
 const { PracticeEconomy } = await moduleAt('../src/game/economy.ts');
 const { LocalObjectiveAuthority, OBJECTIVE_SITES } = await moduleAt('../src/game/objective.ts');
-const dictionary = { ...commonTranslations, ...gameplayTranslations };
+const dictionary = { ...commonTranslations, ...gameplayTranslations, ...multiplayerTranslations };
 const my = (source, variables) => translate(source, 'my', variables);
 const slots = text => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort();
 const assertMyanmar = text => {
@@ -119,7 +120,7 @@ test('shop categories, descriptions and non-brand equipment names all translate'
   for (const key of ['LOW', 'MEDIUM', 'HIGH', 'BUY', 'LIVE', 'ENDED', 'COMBAT', 'PLANTED', 'RESULT', 'TRANSITION', 'MELEE', 'RELOADING', 'INSPECTING', 'SWITCHING WEAPON', 'carried', 'dropped', 'planted', 'defused', 'detonated', 'ATTACKER SPAWN', 'DEFENDER SPAWN', 'A · MARKET COURT', 'B · TIMBER YARD', 'MARKET WALK', 'TIMBER PASSAGE', 'CENTRAL COURTYARD']) assertMyanmar(my(key));
 });
 
-const sourceFiles = ['App.tsx', 'components/SettingsPanel.tsx', 'components/BuyMenu.tsx', 'components/ObjectiveHud.tsx', 'components/TouchControls.tsx'];
+const sourceFiles = ['App.tsx', 'components/SettingsPanel.tsx', 'components/BuyMenu.tsx', 'components/ObjectiveHud.tsx', 'components/TouchControls.tsx', 'components/RoomPanel.tsx'];
 const parse = name => ts.createSourceFile(name, readFileSync(new URL(`../src/${name}`, import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, name.endsWith('tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
 const visit = (node, callback) => { callback(node); ts.forEachChild(node, child => visit(child, callback)); };
 // Only read possible output branches; condition literals are internal IDs, not displayed copy.
@@ -146,6 +147,7 @@ test('visible JSX and accessibility labels do not introduce untranslated prose',
   const allowed = new Set(['BURMA', 'STRIKE', 'VOL. 01', '20° 56′ N &nbsp; 94° 53′ E', '© 2026 BURMA STRIKE', 'ESC', 'TAB', 'FPS', 'English', '30 FPS', '60 FPS']);
   for (const name of sourceFiles) visit(parse(name), node => {
     if (ts.isJsxText(node) && /[A-Za-z]{2}/.test(node.text)) assert.ok(allowed.has(node.text.trim()), `${name}: ${node.text.trim()}`);
-    if (ts.isJsxAttribute(node) && ['aria-label', 'title', 'placeholder'].includes(node.name.getText()) && node.initializer && ts.isStringLiteral(node.initializer)) assert.doesNotMatch(node.initializer.text, /[A-Za-z]{2}/, `${name}: translate ${node.getText()}`);
+    // The six-character example is a protocol room code, not English copy.
+    if (ts.isJsxAttribute(node) && ['aria-label', 'title', 'placeholder'].includes(node.name.getText()) && node.initializer && ts.isStringLiteral(node.initializer) && node.initializer.text !== 'ABC234') assert.doesNotMatch(node.initializer.text, /[A-Za-z]{2}/, `${name}: translate ${node.getText()}`);
   });
 });

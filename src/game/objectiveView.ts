@@ -250,7 +250,7 @@ export class ObjectiveView {
     return actor;
   }
 
-  update(dt: number, snapshot: ObjectiveSnapshot | null, controlledId: string, equipped: boolean, sound: boolean) {
+  update(dt: number, snapshot: ObjectiveSnapshot | null, controlledId: string, equipped: boolean, sound: boolean, renderActors = true) {
     if (this.disposed) return;
     const step = Math.min(Math.max(dt, 0), 0.1);
     this.elapsed += step;
@@ -268,7 +268,7 @@ export class ObjectiveView {
     for (const [id, site] of this.sites) site.setEnabled(snapshot.config.activeSite === 'both' || snapshot.config.activeSite === id);
     const controlled = snapshot.players.find(player => player.id === controlledId);
     const activeActors = new Set<string>();
-    for (const player of snapshot.players) {
+    for (const player of renderActors ? snapshot.players : []) {
       if (player.id === controlledId || !player.alive || !player.connected) continue;
       activeActors.add(player.id);
       const actor = this.actors.get(player.id) ?? this.createActor(player.id, player.team);

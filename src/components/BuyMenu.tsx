@@ -9,6 +9,7 @@ import WeaponPreview from './WeaponPreview';
 import { useI18n } from '../i18n';
 
 interface BuyMenuProps {
+  online?: boolean;
   active?: boolean;
   objectiveMode?: boolean;
   objectiveStatus?: string;
@@ -27,7 +28,7 @@ const categories = ['All', 'Pistols', 'SMGs', 'Rifles', 'Snipers', 'Armor'] as c
 const credits = (amount: number) => new Intl.NumberFormat('en-US').format(amount);
 
 /** Presentation only: all purchase, credit and armor changes go through the practice authority. */
-export default function BuyMenu({ snapshot, onClose, onBuy, onSell, onEquip, onStartDrill, onStartRound, onFinishRound, onNewRound, onTestDamage, objectiveMode = false, objectiveStatus, active = true }: BuyMenuProps) {
+export default function BuyMenu({ snapshot, onClose, onBuy, onSell, onEquip, onStartDrill, onStartRound, onFinishRound, onNewRound, onTestDamage, objectiveMode = false, objectiveStatus, active = true, online = false }: BuyMenuProps) {
   const { t } = useI18n();
   const [category, setCategory] = useState<(typeof categories)[number]>('All');
   const [selectedId, setSelectedId] = useState<ShopItemId>('pistol');
@@ -71,7 +72,7 @@ export default function BuyMenu({ snapshot, onClose, onBuy, onSell, onEquip, onS
         <div className="shop-wallet"><Coins size={18} /><div><small>{t('AVAILABLE CREDITS')}</small><strong>{snapshot ? credits(snapshot.credits) : '—'}<span>/ 9,000</span></strong></div></div>
         <button ref={closeRef} className="shop-close" aria-label={t('Close shop')} onClick={onClose}><X size={21} /><kbd>ESC</kbd></button>
       </header>
-      <div className={`shop-phase ${snapshot?.phase ?? 'catalog'}`}><span><i />{t(objectiveMode ? objectiveStatus ?? phaseLabel : phaseLabel)}{snapshot && <b>{t('ROUND {round}', { round: String(snapshot.round).padStart(2,'0') })}</b>}</span><small>{t(objectiveMode ? 'ROYAL SIGNAL CORE · LOCAL OBJECTIVE SANDBOX' : snapshot ? 'LOCAL ECONOMY DRILL · NO MULTIPLAYER SERVER' : 'FREE ARSENAL · START A LOCAL DRILL TO TEST PURCHASES')}</small></div>
+      <div className={`shop-phase ${snapshot?.phase ?? 'catalog'}`}><span><i />{t(objectiveMode ? objectiveStatus ?? phaseLabel : phaseLabel)}{snapshot && <b>{t('ROUND {round}', { round: String(snapshot.round).padStart(2,'0') })}</b>}</span><small>{t(online ? 'PRIVATE ONLINE MATCH' : objectiveMode ? 'ROYAL SIGNAL CORE · LOCAL OBJECTIVE SANDBOX' : snapshot ? 'LOCAL ECONOMY DRILL · NO MULTIPLAYER SERVER' : 'FREE ARSENAL · START A LOCAL DRILL TO TEST PURCHASES')}</small></div>
       <nav className="shop-categories" aria-label={t('Shop categories')}>{categories.map((name, index) => <button key={name} className={category === name ? 'active' : ''} aria-pressed={category === name} onClick={() => chooseCategory(name)}><span>0{index + 1}</span>{t(name)}</button>)}</nav>
       <div className="shop-body">
         <section className="shop-catalog" aria-label={t('{category} equipment', { category: t(category) })}>
@@ -87,7 +88,7 @@ export default function BuyMenu({ snapshot, onClose, onBuy, onSell, onEquip, onS
               <div className="shop-card-bottom"><span>{t(equipped ? 'EQUIPPED' : owned ? snapshot ? 'OWNED' : 'FREE RANGE' : 'NOT OWNED')}</span><small>{gun ? t('{damage} DMG · {rounds} RDS', { damage: gun.damage, rounds: gun.magazineSize }) : t('{points} ARMOR POINTS', { points: item.armorPoints ?? 0 })}</small></div>
             </button>;
           })}</div>
-          <div className="shop-catalog-note"><Shield size={14} /><span>{t('Permanent kit: LOTUS EDGE tactical knife. Credits and gear changes belong to this local Practice session.')}</span></div>
+          <div className="shop-catalog-note"><Shield size={14} /><span>{t(online ? 'Permanent kit: LOTUS EDGE tactical knife. Purchases, credits and gear are validated by the room server.' : 'Permanent kit: LOTUS EDGE tactical knife. Credits and gear changes belong to this local Practice session.')}</span></div>
         </section>
         <aside className="shop-detail" aria-label={t('Selected equipment details')}>
           <div className="shop-detail-eyebrow"><span>{t(selected.category)}</span><span>{!snapshot ? t('FREE RANGE') : selectedEquipped ? `● ${t('EQUIPPED')}` : selectedOwned ? `✓ ${t('OWNED')}` : t('FIELD READY')}</span></div>

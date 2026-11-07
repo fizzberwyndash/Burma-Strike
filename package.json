@@ -7,18 +7,26 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "node --test tests/gameplay.test.mjs tests/input.test.mjs tests/economy.test.mjs tests/objective.test.mjs tests/objective-session.test.mjs tests/graphics.test.mjs tests/localization.test.mjs"
+    "test": "node --test tests/gameplay.test.mjs tests/input.test.mjs tests/economy.test.mjs tests/objective.test.mjs tests/objective-session.test.mjs tests/graphics.test.mjs tests/localization.test.mjs tests/world.test.mjs tests/network-client.test.mjs tests/online-presentation.test.mjs",
+    "world:generate": "node scripts/generate-world.mjs",
+    "world:check": "node scripts/generate-world.mjs --check",
+    "server:dev": "npm --prefix server run dev",
+    "server:build": "npm --prefix server run build",
+    "server:start": "npm --prefix server start",
+    "server:test": "npm --prefix server test"
   },
   "dependencies": {
     "@babylonjs/core": "^8.0.0",
+    "@colyseus/sdk": "0.18.9",
+    "lucide-react": "^0.468.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "lucide-react": "^0.468.0"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "esbuild": "0.25.12",
     "typescript": "~5.7.3",
     "vite": "^6.1.0"
   }

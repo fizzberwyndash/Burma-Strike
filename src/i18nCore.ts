@@ -1,12 +1,13 @@
 import { commonTranslations } from './locales/common';
 import { gameplayPatterns, gameplayTranslations } from './locales/gameplay';
+import { multiplayerTranslations } from './locales/multiplayer';
 
 export type Language = 'en' | 'my';
 export type TranslationVariables = Record<string, string | number>;
 
 // A null prototype keeps unknown source phrases such as "constructor" safe.
 const dictionary: Readonly<Record<string, string>> = Object.freeze(Object.assign(
-  Object.create(null) as Record<string, string>, commonTranslations, gameplayTranslations,
+  Object.create(null) as Record<string, string>, commonTranslations, gameplayTranslations, multiplayerTranslations,
 ));
 
 /** Pure text translation. English source copy remains a safe fallback for unknown keys. */

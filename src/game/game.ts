@@ -12,7 +12,7 @@ import { buildMap } from './map';
 import { GameInput } from './input';
 import { ArsenalView, GameAudio } from './weapon';
 import { ShotEffects } from './effects';
-import { WeaponInventory } from './weapons';
+import { WeaponInventory, WEAPONS } from './weapons';
 import type { WeaponId, WeaponAction } from './weapons';
 import { DEFAULT_SETTINGS, normalizeSettings } from './settings';
 import type { GameSettings } from './settings';
@@ -24,6 +24,8 @@ import type { ObjectiveConfig, ObjectiveSnapshot, ObjectiveCommand } from './obj
 import { ObjectiveView } from './objectiveView';
 import { GraphicsController } from './graphics';
 import { EnvironmentAudio } from './environmentAudio';
+import { RemotePlayers } from './remotePlayers';
+import type { OnlineGameBridge, OnlineSnapshot, OnlinePlayer, OnlineInput, ShotEvent } from '../network/protocol';
 export type { GameSettings } from './settings';
 
 export type GameMode = 'menu' | 'playing' | 'paused';
@@ -38,6 +40,7 @@ export interface HudState {
   economy: EconomySnapshot | null;
   objective: ObjectiveSnapshot | null; controlledId: string; objectiveEquipped: boolean;
   interactHeld: boolean; scoreboard: boolean; canInteract: boolean; interactLabel: string;
+  online: boolean;
   playerPosition: {x:number;y:number;z:number};
   location: string; graphicsQuality: 'low' | 'medium' | 'high'; renderScale: number; targetFps: 30 | 60;
 }
@@ -49,7 +52,7 @@ export const INITIAL_HUD: HudState = {
   armor: 0, armorType: null, credits: 800, economyMode: false, phase: 'buy', round: 1, economy: null,
   objective: null, controlledId: 'attacker-1', objectiveEquipped: false, interactHeld: false,
   scoreboard:false, canInteract:false, interactLabel:'', playerPosition:{x:0,y:1,z:-12},
-  location:'ATTACKER SPAWN', graphicsQuality:'high', renderScale:1, targetFps:60,
+  online:false, location:'ATTACKER SPAWN', graphicsQuality:'high', renderScale:1, targetFps:60,
 };
 
 /** Owns the existing Practice scene. Input, inventory and presentation have separate lifetimes. */
@@ -88,6 +91,20 @@ export class StrikeGame {
   private objectivePhaseKey = '';
   private graphics: GraphicsController;
   private environmentAudio: EnvironmentAudio;
+  private readonly remotePlayers: RemotePlayers;
+  private onlineBridge: OnlineGameBridge | null = null;
+  private onlineSnapshot: OnlineSnapshot | null = null;
+  private onlineUnsubscribe: (() => void) | null = null;
+  private onlineInputSequence = 0;
+  private onlineInputTimer = 0;
+  private onlineJump = false;
+  private onlinePhaseKey = '';
+  private onlineLastAck = -1;
+  private onlineLastSnapshotAt = 0;
+  private readonly onlinePredictions = new Map<number, Vector3>();
+  private onlineCorrection = Vector3.Zero();
+  private onlineCosmeticCooldown = 0;
+  private onlinePredictedShotAt = -1000;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -119,6 +136,7 @@ export class StrikeGame {
     this.weapon.setVisible(false);
     this.effects = new ShotEffects(this.scene);
     this.objectiveView = new ObjectiveView(this.scene, this.camera);
+    this.remotePlayers = new RemotePlayers(this.scene);
     this.input = new GameInput(canvas, {
       onPause, onShoot: () => this.shoot(), onReload: () => this.reload(), onJump: () => this.jump(),
       onSlot: slot => this.equipSlot(slot), onPrimaryCycle: () => this.cyclePrimary(),
@@ -158,7 +176,7 @@ export class StrikeGame {
     this.input.active = mode === 'playing' && !this.shopOpen && this.objectivePhaseAllowsInput();
     this.weapon.setVisible(mode !== 'menu' && !this.deviceEquipped);
     if (mode === 'playing') {
-      if (previous === 'menu') { this.resetPosition(); this.inventory.draw(); this.updateCamera(); }
+      if (previous === 'menu' && !this.onlineBridge) { this.resetPosition(); this.inventory.draw(); this.updateCamera(); }
       if (!this.shopOpen) this.input.requestPointerLock();
     } else {
       this.state.ads = false; this.state.sprinting = false;
@@ -166,7 +184,219 @@ export class StrikeGame {
       this.input.releasePointerLock();
       if (mode === 'menu') { this.shopOpen = false; this.input.shopOpen = false; this.onShop(false); }
     }
+    if (this.onlineBridge && mode !== 'playing') this.sendOnlineInput();
     this.emitHud();
+  }
+
+  /** Connect the existing scene to a real room. Local Practice retains its own
+   * independent authority and is restored when this bridge is detached. */
+  attachOnline(bridge: OnlineGameBridge) {
+    if (this.onlineBridge === bridge && this.controlledId === bridge.sessionId) return;
+    this.detachOnline(); this.clearObjective();
+    this.economy = null; this.inventory = new WeaponInventory();
+    this.onlineBridge = bridge; this.controlledId = bridge.sessionId;
+    this.onlineSnapshot = null; this.onlineInputSequence = 0; this.onlineInputTimer = 0;
+    this.onlinePhaseKey = ''; this.onlineLastAck = -1; this.onlineLastSnapshotAt = 0; this.onlinePredictions.clear();
+    this.onlineCorrection.setAll(0); this.onlineCosmeticCooldown = 0;
+    this.state = {...INITIAL_HUD, online:true, controlledId:bridge.sessionId};
+    this.onlineUnsubscribe = bridge.onShot(event => this.onlineShotEvent(event));
+    for (const target of this.map.targets) target.root.setEnabled(false);
+    this.syncOnlineSnapshot(); this.updateCamera(); this.emitHud();
+  }
+
+  detachOnline() {
+    if (!this.onlineBridge) return;
+    this.interact(false);
+    this.input.active = false; this.sendOnlineInput();
+    this.onlineUnsubscribe?.(); this.onlineUnsubscribe = null;
+    this.onlineBridge = null; this.onlineSnapshot = null;
+    this.remotePlayers.clear(); this.onlinePredictions.clear(); this.onlineCorrection.setAll(0);
+    this.onlinePhaseKey = ''; this.onlineJump = false; this.deviceEquipped = false;
+    this.objectiveView.update(0, null, this.controlledId, false, false);
+    this.economy = null; this.inventory = new WeaponInventory();
+    this.controlledId = 'attacker-1'; this.state = {...INITIAL_HUD};
+    this.shopOpen = false; this.input.shopOpen = false; this.onShop(false);
+    this.weapon.equip(this.inventory.definition); this.resetTargets(); this.resetPosition(); this.updateCamera();
+    this.emitHud();
+  }
+
+  private currentObjective(): ObjectiveSnapshot | null {
+    return this.onlineBridge ? this.onlineSnapshot?.objective ?? null : this.objectiveSession?.snapshot ?? null;
+  }
+  private onlineSelf(): OnlinePlayer | undefined {
+    return this.onlineSnapshot?.players.find(player => player.id === this.controlledId);
+  }
+  private onlineCanMove() {
+    const self = this.onlineSelf(), phase = this.currentObjective()?.phase;
+    return performance.now() - this.onlineLastSnapshotAt < 1000 && this.mode === 'playing' && !this.shopOpen && !!self?.connected && self.alive &&
+      this.onlineSnapshot?.stage === 'match' && (phase === 'combat' || phase === 'planted');
+  }
+
+  private syncOnlineSnapshot() {
+    const snapshot = this.onlineBridge?.getSnapshot();
+    if (!snapshot || snapshot === this.onlineSnapshot) return;
+    const firstSnapshot = this.onlineSnapshot === null;
+    const previousAction = this.onlineSelf()?.inventory.action;
+    const previousWeapon = this.inventory.activeId;
+    this.onlineSnapshot = snapshot; this.onlineLastSnapshotAt = performance.now();
+    this.remotePlayers.receive(snapshot, this.controlledId, performance.now());
+    const self = this.onlineSelf();
+    if (!self) return;
+    this.inventory.setOwnership(self.economy.ownedWeapons);
+    this.inventory.primaryId = self.inventory.primaryId;
+    this.inventory.activeId = self.inventory.weaponId;
+    // Ownership updates may already change activeId when a weapon is lost or
+    // the online starting knife replaces Practice's pistol. Compare the prior
+    // visible selection, rather than the ownership-adjusted inventory.
+    if (firstSnapshot || previousWeapon !== self.inventory.weaponId) {
+      this.weapon.equip(this.inventory.definition);
+    }
+    this.inventory.action = self.inventory.action;
+    this.inventory.ammunition.magazine = self.inventory.magazine;
+    this.inventory.ammunition.reserve = self.inventory.reserve;
+    this.deviceEquipped = self.deviceEquipped;
+    this.state.kills = self.kills;
+    if (previousAction !== 'reloading' && self.inventory.action === 'reloading') this.audio.reload();
+    const objective = snapshot.objective;
+    const phaseKey = `${snapshot.stage}:${objective?.epoch}:${objective?.round}:${objective?.phase}`;
+    if (phaseKey !== this.onlinePhaseKey) {
+      const phase = objective?.phase;
+      const first = !this.onlinePhaseKey;
+      this.onlinePhaseKey = phaseKey;
+      if (phase === 'buy' || first) {
+        this.player.position.set(self.position.x, self.position.y, self.position.z);
+        this.player.computeWorldMatrix(true); this.velocity.setAll(0); this.velocityY = 0;
+        this.yaw = self.yaw; this.pitch = self.pitch;
+        this.onlineCorrection.setAll(0); this.onlinePredictions.clear(); this.onlineLastAck = self.lastInput;
+      }
+      if (phase === 'buy' && snapshot.stage === 'match') {
+        this.shopOpen = true; this.input.shopOpen = true; this.input.active = false;
+        this.input.releasePointerLock(); this.onShop(true); this.environmentAudio.shop(true);
+      } else if (phase === 'combat' && snapshot.stage === 'match') {
+        this.environmentAudio.roundStart(); this.closeShop();
+      } else if (phase === 'result' || phase === 'transition' || snapshot.stage === 'finished') {
+        this.shopOpen = false; this.input.shopOpen = false; this.onShop(false);
+        this.input.active = false; this.input.releasePointerLock(); this.velocity.setAll(0);
+        if (phase === 'result' && objective?.result) this.environmentAudio.victory(objective.result.winner === self.team);
+      }
+    }
+    if (self.lastInput !== this.onlineLastAck) {
+      const predicted = this.onlinePredictions.get(self.lastInput);
+      this.onlineLastAck = self.lastInput;
+      const authoritative = new Vector3(self.position.x, self.position.y, self.position.z);
+      // Compare the acknowledgement with the position saved when that input was
+      // sent. Keep newer local movement, then recover the bounded prediction error.
+      if (Vector3.DistanceSquared(this.player.position, authoritative) > 16 || this.player.position.y < -3) {
+        this.player.position.copyFrom(authoritative); this.velocity.setAll(0); this.velocityY = 0;
+        this.onlineCorrection.setAll(0); this.onlinePredictions.clear();
+      } else if (predicted) {
+        this.onlineCorrection.copyFrom(authoritative).subtractInPlace(predicted);
+      }
+      for (const seq of this.onlinePredictions.keys()) if (seq < self.lastInput) this.onlinePredictions.delete(seq);
+    }
+  }
+
+  private sendOnlineInput(forceFire?: boolean) {
+    const bridge = this.onlineBridge;
+    if (!bridge) return;
+    const allowed = this.onlineCanMove();
+    const input: OnlineInput = {
+      seq:this.onlineInputSequence = Math.max(this.onlineInputSequence,this.onlineSelf()?.lastInput ?? 0)+1,
+      moveX:allowed ? this.input.moveX : 0, moveY:allowed ? this.input.moveY : 0,
+      yaw:Math.atan2(Math.sin(this.yaw), Math.cos(this.yaw)), pitch:this.pitch,
+      sprint:allowed && this.input.sprinting, ads:allowed && this.input.adsHeld && !this.deviceEquipped,
+      fire:allowed && !this.deviceEquipped && (forceFire ?? this.input.fireHeld),
+      jump:allowed && this.onlineJump,
+    };
+    this.onlineJump = false;
+    this.onlinePredictions.set(input.seq, this.player.position.clone());
+    while (this.onlinePredictions.size > 120) this.onlinePredictions.delete(this.onlinePredictions.keys().next().value!);
+    bridge.sendInput(input);
+  }
+
+  private onlineShoot(send: boolean) {
+    if (!this.onlineCanMove() || this.deviceEquipped) return;
+    if (send) this.sendOnlineInput(true);
+    if (this.inventory.busy || this.state.sprinting || this.onlineCosmeticCooldown > 0 ||
+      (this.inventory.definition.kind !== 'knife' && this.inventory.ammunition.magazine <= 0)) return;
+    // Immediate animation/audio are cosmetic. Only the server consumes ammo,
+    // performs the ray test, awards credits, and confirms a hit.
+    this.weapon.fire();
+    if (this.inventory.definition.kind === 'knife') this.audio.melee(); else this.audio.fire(this.inventory.definition.kind);
+    this.onlineCosmeticCooldown = this.inventory.definition.fireInterval;
+    this.onlinePredictedShotAt = performance.now();
+  }
+
+  private onlineShotEvent(event: ShotEvent) {
+    if (!this.onlineBridge || !Object.hasOwn(WEAPONS, event.weaponId)) return;
+    const definition = WEAPONS[event.weaponId];
+    const own = event.playerId === this.controlledId;
+    const now = performance.now();
+    let start = own ? this.weapon.getMuzzlePosition() : new Vector3(event.from.x, event.from.y, event.from.z);
+    let end = new Vector3(event.to.x, event.to.y, event.to.z);
+    const origin = new Vector3(event.from.x, event.from.y, event.from.z);
+    const muzzleDelta = start.subtract(origin);
+    if (muzzleDelta.length() > .001) {
+      const near = this.scene.pickWithRay(new Ray(origin, muzzleDelta.normalizeToNew(), muzzleDelta.length()), mesh => !!mesh.metadata?.solid);
+      if (near?.hit) start = origin;
+    }
+    // Cosmetic muzzle offset may differ from the authoritative eye ray. Clip its
+    // separate segment as well, so no visible tracer can cross nearby cover.
+    const travel = end.subtract(start);
+    if (travel.length() > .001) {
+      const obstruction = this.scene.pickWithRay(new Ray(start, travel.normalizeToNew(), travel.length()), mesh => !!mesh.metadata?.solid);
+      if (obstruction?.hit && obstruction.pickedPoint) end = obstruction.pickedPoint;
+    }
+    this.effects.shot(start, end, definition);
+    const normal = new Vector3(event.normal.x, event.normal.y, event.normal.z);
+    this.effects.impact(new Vector3(event.to.x, event.to.y, event.to.z), normal, event.surface, event.weaponId);
+    if (own) {
+      this.state.shots++;
+      if (this.mode === 'playing' && now - this.onlinePredictedShotAt > 120) {
+        this.weapon.fire(); if (event.weaponId === 'knife') this.audio.melee(); else this.audio.fire(event.weaponId);
+      }
+      if (event.victimId) {
+        this.state.hits++; this.state.hitAt = now; this.state.headshot = event.headshot; this.audio.hit(event.killed);
+      }
+    } else {
+      this.remotePlayers.shot(event.playerId);
+      if (this.mode === 'playing' && Vector3.DistanceSquared(this.player.position, origin) < 400) {
+        if (event.weaponId === 'knife') this.audio.melee(); else this.audio.fire(event.weaponId);
+      }
+    }
+    this.emitHud();
+  }
+
+  private updateOnline(dt: number, elapsed: number) {
+    this.syncOnlineSnapshot();
+    this.remotePlayers.update(dt, performance.now());
+    this.onlineCosmeticCooldown = Math.max(0, this.onlineCosmeticCooldown - dt);
+    const look = {x:0,y:0}; let travelSpeed = 0;
+    this.input.shopEnabled = this.mode === 'playing' && this.objectivePhaseAllowsInput();
+    this.input.active = this.mode === 'playing' && !this.shopOpen && this.objectivePhaseAllowsInput();
+    if (this.mode === 'playing') {
+      this.input.update(); this.refreshAim();
+      Object.assign(look, this.input.consumeLook());
+      this.yaw += look.x; this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch + look.y));
+      const beforeX = this.player.position.x, beforeZ = this.player.position.z;
+      if (this.onlineCanMove()) {
+        const steps = Math.max(1, Math.ceil(dt / .016));
+        for (let i = 0; i < steps; i++) this.move(dt / steps);
+      } else { this.velocity.setAll(0); this.velocityY = 0; this.jumpBuffer = 0; this.state.sprinting = false; }
+      travelSpeed = Math.hypot(this.player.position.x-beforeX,this.player.position.z-beforeZ) / Math.max(.0001,dt);
+      if (this.input.fireHeld && this.inventory.definition.automatic) this.onlineShoot(false);
+      const desired = (this.state.ads ? Math.min(this.settings.fov,this.inventory.definition.adsFov) : this.settings.fov) * Math.PI / 180;
+      this.camera.fov += (desired-this.camera.fov)*(1-Math.exp(-18*dt));
+    }
+    if (this.onlineCorrection.lengthSquared() > .000001) {
+      const correction = this.onlineCorrection.scale(1-Math.exp(-14*dt));
+      this.player.computeWorldMatrix(true); this.player.moveWithCollisions(correction);
+      this.onlineCorrection.subtractInPlace(correction);
+    }
+    this.updateCamera();
+    this.onlineInputTimer += elapsed;
+    if (this.onlineInputTimer >= 1/30) { this.onlineInputTimer %= 1/30; this.sendOnlineInput(); }
+    return {look,travelSpeed};
   }
 
   private resetPosition() {
@@ -177,6 +407,7 @@ export class StrikeGame {
   }
 
   restart() {
+    if (this.onlineBridge) return;
     if (this.objectiveSession) { this.rematchObjective(); return; }
     // Free Range retains its original reset. Economy resets are explicit fresh drills,
     // rather than a way to grant purchased equipment or bypass phase validation.
@@ -193,6 +424,7 @@ export class StrikeGame {
   }
 
   equipSlot(slot: number) {
+    if (this.onlineBridge) { if ([1,2,3,4].includes(slot)) this.onlineBridge.sendAction({type:'equip',slot:slot as 1|2|3|4}); return; }
     if (this.mode === 'menu' || this.economy?.snapshot.phase === 'ended') return;
     if (slot === 4) {
       if (!this.objectiveSession || this.inventory.busy) return;
@@ -215,6 +447,7 @@ export class StrikeGame {
     }
   }
   selectPrimary(id: 'rifle' | 'smg' | 'sniper') {
+    if (this.onlineBridge) { this.onlineBridge.sendAction({type:'select-primary',weaponId:id}); return; }
     if (!['rifle', 'smg', 'sniper'].includes(id)) return;
     if (this.economy && this.inventory.busy) return;
     if (!this.inventory.owns(id)) return;
@@ -238,6 +471,7 @@ export class StrikeGame {
 
   /** Unrestricted arsenal from previous phases, independent of the economy drill. */
   startFreePractice() {
+    this.detachOnline();
     this.clearObjective();
     this.economy = null;
     this.shopOpen = false; this.input.shopOpen = false; this.onShop(false);
@@ -246,6 +480,7 @@ export class StrikeGame {
   }
 
   startEconomyDrill() {
+    this.detachOnline();
     this.clearObjective();
     this.economy = new PracticeEconomy();
     this.state = {...INITIAL_HUD};
@@ -264,7 +499,9 @@ export class StrikeGame {
     this.shopOpen = true; this.input.shopOpen = true; this.input.active = false;
     this.state.ads = false; this.state.sprinting = false;
     this.velocity.setAll(0); this.jumpBuffer = 0;
-    this.input.releasePointerLock(); this.onShop(true); this.emitHud();
+    this.input.releasePointerLock(); this.onShop(true);
+    if (this.onlineBridge) this.sendOnlineInput();
+    this.emitHud();
   }
 
   closeShop() {
@@ -301,15 +538,17 @@ export class StrikeGame {
     return result;
   }
 
-  buyItem(itemId: string) { return this.economyCommand({type:'buy', itemId}, true); }
-  sellItem(itemId: string) { return this.economyCommand({type:'sell', itemId}, true); }
+  buyItem(itemId: string) { if (this.onlineBridge) { this.onlineBridge.sendAction({type:'buy',itemId}); return; } return this.economyCommand({type:'buy', itemId}, true); }
+  sellItem(itemId: string) { if (this.onlineBridge) { this.onlineBridge.sendAction({type:'sell',itemId}); return; } return this.economyCommand({type:'sell', itemId}, true); }
   shopEquipWeapon(id: WeaponId) {
+    if (this.onlineBridge) { if (id === 'pistol') this.equipSlot(2); else if (id === 'knife') this.equipSlot(3); else this.selectPrimary(id); return; }
     // A live-round shop cannot be used to skip a reload or reset a weapon cooldown.
     if (this.economy?.snapshot.phase === 'live' && this.inventory.busy) return;
     return this.economyCommand({type:'equip', weaponId:id}, true);
   }
 
   startRound() {
+    if (this.onlineBridge) return;
     if (this.objectiveSession) return; // Objective buy phase is timed by its authority.
     if (this.economyCommand({type:'start-round'})?.ok) {
       this.environmentAudio.roundStart();
@@ -317,10 +556,12 @@ export class StrikeGame {
     }
   }
   finishRound(outcome: 'win' | 'loss') {
+    if (this.onlineBridge) return;
     if (this.objectiveSession) return;
     if (this.economyCommand({type:'finish-round', outcome})?.ok) { this.environmentAudio.victory(outcome === 'win'); this.openShop(); }
   }
   newRound() {
+    if (this.onlineBridge) return;
     if (this.objectiveSession) { this.nextObjectiveRound(); return; }
     if (!this.economyCommand({type:'new-round'})?.ok) return;
     this.syncEconomyEquipment(true);
@@ -328,6 +569,7 @@ export class StrikeGame {
   }
   /** A real damage path for the explicitly labeled local drill controls. */
   testDamage(amount = 40) {
+    if (this.onlineBridge) return;
     if (this.objectiveSession) { this.objectiveTestDamage(amount); return; }
     const result = this.economyCommand({type:'damage', amount});
     if (result?.ok && this.economy?.snapshot.phase === 'ended') this.openShop();
@@ -335,7 +577,8 @@ export class StrikeGame {
   }
 
   private objectivePhaseAllowsInput() {
-    const phase = this.objectiveSession?.snapshot.phase;
+    if (this.onlineBridge && this.onlineSnapshot?.stage !== 'match') return false;
+    const phase = this.currentObjective()?.phase;
     return phase !== 'result' && phase !== 'transition';
   }
   private clearObjective() {
@@ -346,6 +589,7 @@ export class StrikeGame {
     this.state.scoreboard = false;
   }
   startObjectiveSandbox(config: Partial<ObjectiveConfig> = {}) {
+    this.detachOnline();
     this.interact(false);
     this.objectiveSession = new ObjectiveSession(config);
     this.controlledId = 'attacker-1'; this.deviceEquipped = false; this.objectivePhaseKey = '';
@@ -369,6 +613,15 @@ export class StrikeGame {
   interact(held: boolean) {
     if (!this.input) return;
     this.input.interactHeld = held;
+    if (this.onlineBridge) {
+      const objective = this.currentObjective();
+      const live = objective?.phase === 'combat' || objective?.phase === 'planted';
+      if (objective && live && (!held || (this.mode === 'playing' && !this.shopOpen && this.objectiveEligibility().eligible))) {
+        if (held) { this.velocity.setAll(0); this.input.touchTrigger(false); this.input.touchAds(false); this.sendOnlineInput(); }
+        this.onlineBridge.sendAction({type:'interact',held,round:objective.round,epoch:objective.epoch});
+      }
+      this.emitHud(); return;
+    }
     if (!this.objectiveSession) return;
     if (held && (this.mode !== 'playing' || this.shopOpen || !this.objectiveEligibility().eligible)) return;
     if (held) {
@@ -383,12 +636,15 @@ export class StrikeGame {
     this.input.scoreboardHeld = held; this.state.scoreboard = held; this.emitHud();
   }
   nextObjectiveRound() {
+    if (this.onlineBridge) return;
     if (this.objectiveIntent('next-round', true)?.ok) this.objectivePhaseChanged();
   }
   rematchObjective() {
+    if (this.onlineBridge) return;
     if (this.objectiveIntent('rematch', true)?.ok) this.objectivePhaseChanged();
   }
   controlObjectivePlayer(id: string) {
+    if (this.onlineBridge) return;
     const session = this.objectiveSession;
     const player = session?.snapshot.players.find(p => p.id === id);
     if (!session || !player?.connected) return;
@@ -402,6 +658,7 @@ export class StrikeGame {
     this.weapon.setVisible(this.mode !== 'menu'); this.updateCamera(); this.emitHud();
   }
   teleportObjectiveSite(id: 'A' | 'B') {
+    if (this.onlineBridge) return;
     if (!this.objectiveSession) return;
     const site = OBJECTIVE_SITES.find(s => s.id === id);
     if (!site) return;
@@ -417,12 +674,14 @@ export class StrikeGame {
     this.updateCamera(); this.emitHud();
   }
   objectiveTestDamage(amount = 20) {
+    if (this.onlineBridge) return;
     const s = this.objectiveSession?.snapshot;
     if (!s) return;
     this.objectiveSession!.damage(this.controlledId, amount, `${s.epoch}:${s.round}:test:${++this.objectiveSequence}`);
     this.objectivePhaseChanged(); this.emitHud();
   }
   disconnectObjectivePlayer(id: string) {
+    if (this.onlineBridge) return;
     const s = this.objectiveSession?.snapshot;
     if (!s) return;
     this.objectiveSession!.authority.disconnect(id, `${s.epoch}:${s.round}:disconnect:${++this.objectiveSequence}`);
@@ -435,7 +694,7 @@ export class StrikeGame {
     this.weapon.setVisible(this.mode !== 'menu');
   }
   private objectiveEligibility(): {eligible:boolean;label:string} {
-    const s = this.objectiveSession?.snapshot;
+    const s = this.currentObjective();
     const p = s?.players.find(player => player.id === this.controlledId);
     if (!s || !p?.alive || !p.connected || !['combat','planted'].includes(s.phase)) return {eligible:false,label:'OBJECTIVE UNAVAILABLE'};
     if (s.phase === 'planted') {
@@ -496,6 +755,7 @@ export class StrikeGame {
     this.emitHud();
   }
   inspect() {
+    if (this.onlineBridge) { if (this.mode === 'playing' && !this.shopOpen) this.onlineBridge.sendAction({type:'inspect'}); return; }
     if (this.mode === 'playing' && !this.shopOpen && !this.deviceEquipped && this.inventory.inspect()) {
       this.input.touchAds(false); this.emitHud();
     }
@@ -513,8 +773,9 @@ export class StrikeGame {
     const ray = new Ray(this.player.position, Vector3.Down(), 0.91);
     return !!this.scene.pickWithRay(ray, m => m !== this.player && !!m.metadata?.solid)?.hit;
   }
-  jump() { if (this.mode === 'playing' && !this.shopOpen) this.jumpBuffer = .12; }
+  jump() { if (this.mode === 'playing' && !this.shopOpen && (!this.onlineBridge || this.onlineCanMove())) { this.jumpBuffer = .12; if (this.onlineBridge) { this.onlineJump = true; this.sendOnlineInput(); } } }
   reload() {
+    if (this.onlineBridge) { if (this.mode === 'playing' && !this.shopOpen) this.onlineBridge.sendAction({type:'reload'}); return; }
     if (this.mode === 'playing' && !this.shopOpen && !this.deviceEquipped && this.inventory.reload()) {
       this.input.touchAds(false); this.audio.reload(); this.emitHud();
     }
@@ -525,6 +786,7 @@ export class StrikeGame {
       (mesh.metadata?.solid || typeof mesh.metadata?.targetIndex === 'number' || typeof mesh.metadata?.objectiveActorId === 'string'));
   }
   shoot() {
+    if (this.onlineBridge) { this.onlineShoot(true); return; }
     const objective = this.objectiveSession?.snapshot;
     const actor = objective?.players.find(p => p.id === this.controlledId);
     if (this.mode !== 'playing' || this.shopOpen || this.deviceEquipped || this.state.sprinting ||
@@ -638,7 +900,7 @@ export class StrikeGame {
     if (this.mode === 'menu') {
       this.camera.position.set(19 + Math.sin(this.time * .07) * 1.5, 9.5, -21);
       this.camera.setTarget(new Vector3(-1, 3, 9));
-    } else if (this.mode === 'playing') {
+    } else if (this.mode === 'playing' && !this.onlineBridge) {
       const previousAction = this.inventory.action;
       if (this.inventory.update(dt)) this.weapon.equip(this.inventory.definition);
       if (previousAction !== this.inventory.action) this.emitHud();
@@ -668,16 +930,18 @@ export class StrikeGame {
         if (target.health <= 0 && this.time >= target.respawnAt) { target.health = 100; target.root.setEnabled(true); }
       }
     }
-    const objectiveInteraction = this.objectiveSession?.snapshot.interaction;
+    if (this.onlineBridge) { const onlineFrame = this.updateOnline(dt, elapsed); look = onlineFrame.look; travelSpeed = onlineFrame.travelSpeed; }
+    const objectiveInteraction = this.currentObjective()?.interaction;
     this.weapon.setVisible(this.mode !== 'menu' && !this.deviceEquipped && objectiveInteraction?.playerId !== this.controlledId);
     this.weapon.update(this.mode === 'paused' ? 0 : dt, {
       speed: this.mode === 'playing' ? this.velocity.length() : 0, sprinting: this.state.sprinting,
-      ads: this.state.ads, action: this.inventory.action, progress: this.inventory.progress,
+      ads: this.state.ads, action: this.inventory.action, progress: this.onlineSelf()?.inventory.progress ?? this.inventory.progress,
       lookX:look.x, lookY:look.y, landing:this.landing,
     });
-    this.effects.update(this.mode === 'paused' ? 0 : dt);
-    this.objectiveView.update(this.mode === 'paused' ? 0 : dt, this.mode === 'menu' ? null : this.objectiveSession?.snapshot ?? null,
-      this.controlledId, this.deviceEquipped, this.settings.sound);
+    const worldVisualDt = this.onlineBridge || this.mode !== 'paused' ? dt : 0;
+    this.effects.update(worldVisualDt);
+    this.objectiveView.update(worldVisualDt, this.mode === 'menu' ? null : this.currentObjective(),
+      this.controlledId, this.deviceEquipped, this.settings.sound && this.mode !== 'paused', !this.onlineBridge);
     const environmentActive = this.mode === 'playing' && !this.shopOpen && this.objectivePhaseAllowsInput();
     this.environmentAudio.update(dt, {
       active:environmentActive,
@@ -691,9 +955,10 @@ export class StrikeGame {
 
   private emitHud() {
     const w = this.inventory.definition, a = this.inventory.ammunition;
-    const objective = this.objectiveSession?.snapshot ?? null;
+    const objective = this.currentObjective();
+    const self = this.onlineSelf();
     const controlled = objective?.players.find(p => p.id === this.controlledId);
-    const account = this.economy?.snapshot ?? null;
+    const account = self?.economy ?? this.economy?.snapshot ?? null;
     // Disconnection is not a damage transaction, so the round authority owns the
     // zero-health presentation for an inactive actor as well as elimination rules.
     const economy = account && controlled ? Object.freeze({...account,health:controlled.health}) : account;
@@ -710,7 +975,7 @@ export class StrikeGame {
       canInteract:eligibility.eligible, interactLabel:eligibility.label,
       playerPosition:{x:this.player.position.x,y:this.player.position.y,z:this.player.position.z},
       location:this.map.locationAt(this.player.position), graphicsQuality:this.graphics.quality,
-      renderScale:this.graphics.renderScale, targetFps:this.graphics.targetFps });
+      renderScale:this.graphics.renderScale, targetFps:this.graphics.targetFps, online:!!this.onlineBridge });
     if (this.deviceEquipped) Object.assign(this.state, {weaponName:'ROYAL SIGNAL CORE',weaponKind:'objective',slot:4,ammo:0,reserve:0});
     this.onHud({ ...this.state });
   }
@@ -720,7 +985,7 @@ export class StrikeGame {
     this.disposed = true;
     this.engine.stopRenderLoop(this.frame);
     window.removeEventListener('resize', this.resize);
-    this.input.dispose(); this.effects.dispose(); this.objectiveView.dispose(); this.weapon.dispose(); this.audio.dispose(); this.environmentAudio.dispose();
+    this.input.dispose(); this.effects.dispose(); this.onlineUnsubscribe?.(); this.remotePlayers.dispose(); this.objectiveView.dispose(); this.weapon.dispose(); this.audio.dispose(); this.environmentAudio.dispose();
     this.map.dispose(); this.scene.dispose(); this.engine.dispose();
   }
 }

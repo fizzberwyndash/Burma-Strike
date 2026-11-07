@@ -41,10 +41,10 @@ const isWeaponId = (value: unknown): value is WeaponId => typeof value === 'stri
 const isArmor = (id: ShopItemId): id is ArmorType => id === 'light-armor' || id === 'heavy-armor';
 
 /**
- * Local-only economy authority for the isolated Practice drill.
+ * Validated economy rules for offline Practice and authoritative server rooms.
  * UI receives immutable snapshots and submits validated commands. No money or armor
- * is loaded from localStorage. This is not a multiplayer security boundary: a future
- * online adapter must execute these rules on the server and broadcast its snapshot.
+ * is loaded from localStorage. The browser instance is not a security boundary;
+ * private online rooms keep this model on the server and broadcast snapshots.
  */
 export class PracticeEconomy {
   #credits = STARTING_CREDITS;

@@ -6,6 +6,8 @@ export type ObjectivePhase = 'buy' | 'combat' | 'planted' | 'result' | 'transiti
 export type ObjectiveSiteId = 'A' | 'B';
 export interface ObjectiveConfig { format: '1v1' | '2v1'; activeSite: 'both' | ObjectiveSiteId }
 export interface ObjectivePoint { x: number; y: number; z: number }
+/** Trusted roster supplied by the server; never copied from a gameplay packet. */
+export interface ObjectiveRosterPlayer { id: string; name: string; team: ObjectiveTeam; position?: ObjectivePoint }
 export interface ObjectivePlayerSnapshot {
   readonly id: string;
   readonly name: string;
@@ -60,6 +62,7 @@ const validId = (id: unknown): id is string => typeof id === 'string' && id.leng
 const reply = (ok: boolean, message: string): ObjectiveReply => Object.freeze({ ok, message });
 
 export class LocalObjectiveAuthority {
+  private readonly roster?: readonly ObjectiveRosterPlayer[];
   private readonly config: ObjectiveConfig;
   private players: Player[];
   private round = 1;
@@ -79,12 +82,21 @@ export class LocalObjectiveAuthority {
   private commands = new Map<string, Receipt>();
   private events = new Map<string, Receipt>();
 
-  constructor(config: Partial<ObjectiveConfig> = {}) {
+  constructor(config: Partial<ObjectiveConfig> = {}, roster?: readonly ObjectiveRosterPlayer[]) {
+    if (roster) {
+      if (roster.length < 2 || roster.length > 10 || new Set(roster.map(player => player.id)).size !== roster.length ||
+          roster.some(player => !validId(player.id) || typeof player.name !== 'string' || !['attackers', 'defenders'].includes(player.team)) ||
+          ['attackers', 'defenders'].some(team => !roster.some(player => player.team === team) || roster.filter(player => player.team === team).length > 5)) {
+        throw new Error('Invalid authoritative player roster');
+      }
+      this.roster = roster.map(player => ({ ...player, position: player.position ? { ...player.position } : undefined }));
+    }
     this.config = {
       format: config.format === '2v1' ? '2v1' : '1v1',
       activeSite: config.activeSite === 'A' || config.activeSite === 'B' ? config.activeSite : 'both',
     };
     this.players = this.createPlayers();
+    this.carrierId = this.players.find(player => player.team === 'attackers')?.id ?? null;
   }
 
   get snapshot(): ObjectiveSnapshot {
@@ -221,7 +233,25 @@ export class LocalObjectiveAuthority {
     });
   }
 
+  /** A verified Colyseus reconnection restores presence, never revives the current life. */
+  reconnect(playerId: string): boolean {
+    const player = this.player(playerId);
+    if (!player) return false;
+    player.connected = true;
+    return true;
+  }
+
   private createPlayers(): Player[] {
+    if (this.roster) {
+      const index = { attackers: 0, defenders: 0 };
+      return this.roster.map(player => {
+        const slot = index[player.team]++;
+        return {
+          id: player.id, name: player.name, team: player.team, health: 100, alive: true, connected: true,
+          position: player.position ? { ...player.position } : { x: (slot - 2) * 1.5, y: .9, z: player.team === 'attackers' ? -12 : 18 },
+        };
+      });
+    }
     const attacker = (id: string, x: number): Player => ({ id, name: id === 'attacker-1' ? 'Attacker 1' : 'Attacker 2', team: 'attackers', health: 100, alive: true, connected: true, position: { x, y: 1, z: -12 } });
     return [attacker('attacker-1', 0), ...(this.config.format === '2v1' ? [attacker('attacker-2', -2)] : []),
       { id: 'defender-1', name: 'Defender 1', team: 'defenders', health: 100, alive: true, connected: true, position: { x: 0, y: 1, z: 18 } }];

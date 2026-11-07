@@ -7,6 +7,7 @@ import { useI18n } from '../i18n';
 type Point = { x: number; y: number; z: number };
 
 interface ObjectiveHudProps {
+  online?: boolean;
   snapshot: ObjectiveSnapshot;
   controlledId: string;
   objectiveEquipped: boolean;
@@ -28,7 +29,7 @@ const clock = (seconds: number) => `${Math.floor(Math.max(0, Math.ceil(seconds))
 const mapPoint = (point: Point) => ({ x: 12 + (point.x + 27) / 54 * 156, y: 168 - (point.z + 20) / 50 * 156 });
 
 /** A read-only view of rule snapshots. No UI timer decides a round outcome. */
-export default function ObjectiveHud({ snapshot, controlledId, objectiveEquipped, interactHeld, scoreboard, canInteract, interactLabel, position, touch, onEquip, onInteract, onScoreboard, onNextRound, onRematch }: ObjectiveHudProps) {
+export default function ObjectiveHud({ online = false, snapshot, controlledId, objectiveEquipped, interactHeld, scoreboard, canInteract, interactLabel, position, touch, onEquip, onInteract, onScoreboard, onNextRound, onRematch }: ObjectiveHudProps) {
   const { t } = useI18n();
   const pointer = useRef<number | null>(null);
   const interactCallback = useRef(onInteract);
@@ -48,10 +49,11 @@ export default function ObjectiveHud({ snapshot, controlledId, objectiveEquipped
   const carried = snapshot.carrierId === controlledId && snapshot.coreState === 'carried';
   const live = snapshot.phase === 'combat' || snapshot.phase === 'planted';
   const corePosition = snapshot.coreState === 'carried' ? carrier?.position : snapshot.corePosition;
-  const coreMap = corePosition ? mapPoint(corePosition) : null;
+  const coreVisible = !online || snapshot.coreState !== 'carried' || carrier?.team === player?.team;
+  const coreMap = corePosition && coreVisible ? mapPoint(corePosition) : null;
   const actorMap = mapPoint(position);
   const phaseLabel = t(snapshot.phase === 'planted' ? 'CORE ACTIVE' : snapshot.phase === 'result' ? 'ROUND RESOLVED' : snapshot.phase === 'transition' ? 'NEXT ROUND' : `${snapshot.phase.toUpperCase()} PHASE`);
-  const phaseNote = snapshot.phase === 'planted' ? t('{site} SITE · DEFENDERS MUST DEFUSE', { site: snapshot.plantedSite ?? '' }) : t(snapshot.phase === 'buy' ? 'B · ARMORY / EQUIP YOUR KIT' : snapshot.phase === 'combat' ? (player?.team === 'attackers' ? 'ARM THE ROYAL SIGNAL CORE' : 'PREVENT THE SIGNAL') : 'LOCAL OBJECTIVE SANDBOX');
+  const phaseNote = snapshot.phase === 'planted' ? t('{site} SITE · DEFENDERS MUST DEFUSE', { site: snapshot.plantedSite ?? '' }) : t(snapshot.phase === 'buy' ? 'B · ARMORY / EQUIP YOUR KIT' : snapshot.phase === 'combat' ? (player?.team === 'attackers' ? 'ARM THE ROYAL SIGNAL CORE' : 'PREVENT THE SIGNAL') : online ? 'PRIVATE ONLINE MATCH' : 'LOCAL OBJECTIVE SANDBOX');
 
   function hold(event: PointerEvent<HTMLButtonElement>, held: boolean) {
     if (held && (pointer.current !== null || !canInteract)) return;
@@ -82,7 +84,7 @@ export default function ObjectiveHud({ snapshot, controlledId, objectiveEquipped
           const active = snapshot.config.activeSite === 'both' || snapshot.config.activeSite === site;
           return <g key={site} className={`objective-map-site ${active ? 'active' : ''}`}><circle cx={point.x} cy={point.y} r="17" /><text x={point.x} y={point.y + 4}>{site}</text></g>;
         })}
-        {snapshot.players.filter(item => item.id !== controlledId && item.connected && item.alive).map(item => {
+        {snapshot.players.filter(item => item.id !== controlledId && item.connected && item.alive && (!online || item.team === player?.team)).map(item => {
           const point = mapPoint(item.position);
           return <circle key={item.id} className={`objective-map-actor ${item.team}`} cx={point.x} cy={point.y} r="3" />;
         })}
@@ -104,12 +106,12 @@ export default function ObjectiveHud({ snapshot, controlledId, objectiveEquipped
       </button>
     </div>}
 
-    {!player?.alive && snapshot.phase !== 'result' && <div className="objective-eliminated"><Shield size={17} /><strong>{t('YOU ARE ELIMINATED')}</strong><span>{t('Esc → Sandbox controls to observe another role.')}</span></div>}
+    {!player?.alive && snapshot.phase !== 'result' && <div className="objective-eliminated"><Shield size={17} /><strong>{t('YOU ARE ELIMINATED')}</strong><span>{t(online ? 'Wait for the next round. Your team can still complete the objective.' : 'Esc → Sandbox controls to observe another role.')}</span></div>}
     {snapshot.message && !interaction && snapshot.phase !== 'result' && <div className="objective-message" role="status">{t(snapshot.message)}</div>}
 
-    {scoreboard && <div className="objective-scoreboard" role="dialog" aria-label={t('Local objective scoreboard')}><header><div><span>{t('LOCAL OBJECTIVE SANDBOX')}</span><h2>{t('ROYAL SIGNAL CORE')}</h2></div><button aria-label={t('Close scoreboard')} onClick={() => onScoreboard(false)}><X size={19} /></button></header><div className="objective-score-summary"><span>{t('ROUND {round}', { round: snapshot.round })}</span><strong>{snapshot.scores.attackers} <small>{t('ATTACKERS / DEFENDERS')}</small> {snapshot.scores.defenders}</strong><span>{snapshot.config.format}</span></div>{(['attackers', 'defenders'] as const).map(team => <section key={team} className={`objective-score-team ${team}`}><h3>{t(teamName(team))}</h3>{snapshot.players.filter(item => item.team === team).map(item => <div className={`objective-score-row ${item.id === controlledId ? 'you' : ''}`} key={item.id}><span><b>{t(item.name)}</b>{item.id === controlledId && <small>{t('YOU')}</small>}{item.id === snapshot.carrierId && <Radio size={13} />}</span><span>{t(!item.connected ? 'DISCONNECTED' : item.alive ? 'ACTIVE' : 'ELIMINATED')}</span><strong aria-label={t('Health {health}', { health: item.health })}>{item.health} <Heart size={10} /></strong></div>)}</section>)}<footer>{t('Offline drill · all roles are simulated locally. Esc opens role and rule test controls.')}</footer></div>}
+    {scoreboard && <div className="objective-scoreboard" role="dialog" aria-label={t(online ? 'Online match scoreboard' : 'Local objective scoreboard')}><header><div><span>{t(online ? 'PRIVATE ONLINE MATCH' : 'LOCAL OBJECTIVE SANDBOX')}</span><h2>{t('ROYAL SIGNAL CORE')}</h2></div><button aria-label={t('Close scoreboard')} onClick={() => onScoreboard(false)}><X size={19} /></button></header><div className="objective-score-summary"><span>{t('ROUND {round}', { round: snapshot.round })}</span><strong>{snapshot.scores.attackers} <small>{t('ATTACKERS / DEFENDERS')}</small> {snapshot.scores.defenders}</strong><span>{online ? `${snapshot.players.filter(item => item.team === 'attackers').length}v${snapshot.players.filter(item => item.team === 'defenders').length}` : snapshot.config.format}</span></div>{(['attackers', 'defenders'] as const).map(team => <section key={team} className={`objective-score-team ${team}`}><h3>{t(teamName(team))}</h3>{snapshot.players.filter(item => item.team === team).map(item => <div className={`objective-score-row ${item.id === controlledId ? 'you' : ''}`} key={item.id}><span><b>{online ? item.name : t(item.name)}</b>{item.id === controlledId && <small>{t('YOU')}</small>}{item.id === snapshot.carrierId && <Radio size={13} />}</span><span>{t(!item.connected ? 'DISCONNECTED' : item.alive ? 'ACTIVE' : 'ELIMINATED')}</span><strong aria-label={t('Health {health}', { health: item.health })}>{item.health} <Heart size={10} /></strong></div>)}</section>)}<footer>{t(online ? 'Connected humans · the server controls damage, equipment, rounds and results.' : 'Offline drill · all roles are simulated locally. Esc opens role and rule test controls.')}</footer></div>}
 
-    {(snapshot.phase === 'result' || snapshot.phase === 'transition') && <div className="objective-result" role="status"><section><Radio size={26} /><span className="objective-result-eyebrow">{t('ROYAL SIGNAL CORE / ROUND {round}', { round: snapshot.round })}</span><h2>{snapshot.result ? t(snapshot.result.winner === 'attackers' ? 'ATTACKERS WIN' : 'DEFENDERS WIN') : t('NEXT ROUND')}</h2><p>{t(snapshot.result?.reason.replace(/[-_]/g, ' ') ?? 'Preparing the fortress for the next deployment.')}</p><div className="objective-result-score"><span>{t('ATTACKERS')} <b>{snapshot.scores.attackers}</b></span><i /> <span>{t('DEFENDERS')} <b>{snapshot.scores.defenders}</b></span></div>{snapshot.phase === 'result' && <div className="objective-result-actions"><button onClick={onNextRound}>{t('NEXT ROUND')} <ArrowRight size={16} /></button><button onClick={onRematch}><RotateCcw size={14} /> {t('REMATCH')}</button></div>}<small>{t('LOCAL SANDBOX · NEXT ROUND OR REMATCH TO CONTINUE')}</small></section></div>}
+    {(snapshot.phase === 'result' || snapshot.phase === 'transition') && <div className="objective-result" role="status"><section><Radio size={26} /><span className="objective-result-eyebrow">{t('ROYAL SIGNAL CORE / ROUND {round}', { round: snapshot.round })}</span><h2>{snapshot.result ? t(snapshot.result.winner === 'attackers' ? 'ATTACKERS WIN' : 'DEFENDERS WIN') : t('NEXT ROUND')}</h2><p>{t(snapshot.result?.reason.replace(/[-_]/g, ' ') ?? 'Preparing the fortress for the next deployment.')}</p><div className="objective-result-score"><span>{t('ATTACKERS')} <b>{snapshot.scores.attackers}</b></span><i /> <span>{t('DEFENDERS')} <b>{snapshot.scores.defenders}</b></span></div>{!online && snapshot.phase === 'result' && <div className="objective-result-actions"><button onClick={onNextRound}>{t('NEXT ROUND')} <ArrowRight size={16} /></button><button onClick={onRematch}><RotateCcw size={14} /> {t('REMATCH')}</button></div>}<small>{t(online ? 'SERVER ROUND RESOLVED · NEXT ROUND STARTS AUTOMATICALLY' : 'LOCAL SANDBOX · NEXT ROUND OR REMATCH TO CONTINUE')}</small></section></div>}
   </div>;
 }
 

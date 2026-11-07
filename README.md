@@ -1,10 +1,10 @@
 # BURMA STRIKE
 
-An original, single-player first-person browser practice range built with React, TypeScript, Vite, and Babylon.js. **Bagan Old City** is a fictional fortified town with procedural Bagan-inspired architecture, materials, targets, and weapon geometry. No external models, copied maps, accounts, or multiplayer services.
+An original first-person browser FPS built with React, TypeScript, Vite and Babylon.js, with offline Practice and private Colyseus custom matches. **Bagan Old City** is a fictional fortified town with procedural Bagan-inspired architecture, materials, targets, and weapon geometry. No external models, copied maps, paid APIs or account requirement.
 
 ## Run locally
 
-Requires Node.js 20.19+ or 22.12+ and npm.
+Use Node.js 22.12+ and npm for the frontend and Colyseus server.
 
 ```sh
 cd /workspace/Burma-Strike
@@ -24,6 +24,10 @@ npm run preview
 ```
 
 Open the address printed by Vite (normally port 4173 for preview).
+
+## Private online custom matches
+
+See [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md) for setup, room codes, 2-player/2v1/5v5 tests, server authority, reconnection, modified files and current limitations. Keep `npm run server:start` (after `npm run server:build`) and `npm run dev` running in separate terminals. Install backend dependencies first with `npm --prefix server ci`. Existing Practice modes work independently of the server.
 
 ## Desktop controls
 
@@ -51,7 +55,7 @@ Settings adjust aim sensitivity, synthesized sound effects, and the FPS display;
 
 ## Tactical arsenal upgrade
 
-The original fortress and Practice targets are retained. You start with the SHWE-9 pistol; slot 1 contains a selectable primary. Press **N** to cycle rifle → SMG → sniper, or choose a primary from the pause menu. Each weapon retains its own magazine, reserve and cooldown. Switching loadouts does not supply free ammo. Slot 4 is reserved and disabled because Practice carries no objective device. No multiplayer code or service is present in this project.
+The original fortress and Practice targets are retained. You start with the SHWE-9 pistol; slot 1 contains a selectable primary. Press **N** to cycle rifle → SMG → sniper, or choose a primary from the pause menu. Each weapon retains its own magazine, reserve and cooldown. Switching loadouts does not supply free ammo. Slot 4 is reserved and disabled because Practice carries no objective device. Private custom matches use the separate Colyseus server described in [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
 
 | Weapon | Magazine / reserve | Fire mode | Body / head damage | Reload |
 | --- | --- | --- | --- | --- |
@@ -114,7 +118,7 @@ In a live drill, open the shop and press **Test 40 Damage**. With Light Armor, H
 
 ### Authority and online boundaries
 
-There is **no multiplayer server** in this repository. `PracticeEconomy` is explicitly local-only and never sends or claims real online purchases. Credits, HP, armor, ownership and refund receipts are private fields, changed only through validated commands; the React UI gets immutable copied snapshots and has no balance/armor setters. Credits and armor are **not** restored from localStorage. Browser owners can ultimately alter their own offline runtime; this is not an anti-cheat or server-security claim.
+Offline Practice is separate from the new private-room server in `server/`. `PracticeEconomy` is explicitly local-only and never sends or claims real online purchases. Credits, HP, armor, ownership and refund receipts are private fields, changed only through validated commands; the React UI gets immutable copied snapshots and has no balance/armor setters. Credits and armor are **not** restored from localStorage. Browser owners can ultimately alter their own offline runtime; this is not an anti-cheat or server-security claim.
 
 `EconomyCommand`, `EconomySnapshot` and the pure rules isolate the authority from presentation. Any future online implementation must execute these rules on the authenticated server, validate phase, balances, item IDs, ownership, equip commands and authoritative elimination/round IDs, and broadcast server snapshots. Local simulation commands and the damage/outcome buttons must never be accepted as authoritative network rewards.
 
@@ -183,13 +187,13 @@ Local pause/focus loss freezes this offline sandbox's clock. The shop does not p
 
 Interaction commands contain an ID, displayed round, monotonic epoch and intent (`interact-start` / `interact-stop`). There is no client `plant-complete`, `defuse-complete`, time-advance or victory command. The authority checks role, carrier, equipment, site/range, alive/connected state and uninterrupted hold, then owns completion and round resolution. IDs are deduplicated with fingerprints, stale epochs/rounds are rejected, and ledgers are bounded without evicting replay protection. NextRound/Rematch require host context supplied by the adapter. Damage and disconnect methods take trusted authoritative observations, never raw client declarations.
 
-**No online multiplayer transport or authoritative server is present in this repository.** Future online code must run the rules, clock, collision validation, damage and reward adapter on the authenticated server; derive actor/host identity from the connection; validate round/epoch on delayed observations; and broadcast read-only snapshots. Never expose the local role-switch, travel, damage or simulated economy controls as authoritative network actions. Local browser owners can ultimately alter their offline runtime; these safeguards do not claim to prevent offline cheating.
+**Private online custom rooms now run this authority through `server/src/MatchSimulation.ts` and Colyseus `BurmaRoom`.** The offline sandbox remains isolated. The online server owns clocks, collision validation, damage and rewards; derive actor/host identity from the connection; validate round/epoch on delayed observations; and broadcast read-only snapshots. Never expose the local role-switch, travel, damage or simulated economy controls as authoritative network actions. Local browser owners can ultimately alter their offline runtime; these safeguards do not claim to prevent offline cheating.
 
 ### Objective verification
 
 `npm test` now includes 24 objective-rule tests plus adapter tests and all previous gameplay/economy/input tests. They cover plant and cancellation paths, defuse and cancellation, deadline ties/large clock steps, timeout/countdown, pre/postplant elimination, carrier recovery, disconnects, frozen snapshots, stale/duplicate/malformed intents, unauthorized host commands, rematch/transition, duplicate trusted events, bounded ledgers, and armor/economy payout integration. A getter-backed position regression exercises Babylon-like vectors through plant/defuse.
 
-Desktop Chromium and emulated mobile were additionally checked through the actual UI and game with natural buy/plant/defuse timings. Real network disconnection, latency/reordering over an actual transport, real phones, other browser engines and audible sound quality were not tested. Rule-level message/disconnect cases were tested without claiming a working multiplayer connection.
+The offline sandbox was checked in desktop Chromium and emulated mobile with natural buy/plant/defuse timings. The current private-room server adds real WebSocket join, host, capacity and reconnect tests; see [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md) for current online verification. Internet latency/reordering, physical phones, other browser engines and audible sound quality remain untested.
 
 New modules: `src/game/objective.ts`, `objectiveSession.ts`, `objectiveView.ts`, `src/components/ObjectiveHud.tsx`, and `tests/objective*.test.mjs`. Existing game, shop, economy, HUD and input integrate the mode while retaining the earlier Free Range and Economy Drill workflows.
 
@@ -201,7 +205,7 @@ Three lanes connect the existing Attacker and Defender spawns: **Market Walk →
 
 Open **Settings → Language** to choose English or မြန်မာ. Menus, settings, weapon shop, health/armor, weapon actions, round phases, objective progress/results, scoreboard and local sandbox controls update immediately and remember the selection. Original weapon/brand names and physical key labels retain their identity. The bundled Noto Sans Myanmar regular/bold fonts load locally and include their font license in `src/assets/fonts/LICENSE-Noto.txt`; no font CDN is required. Myanmar translations have automated coverage and browser layout checks, but still need a native Burmese speaker's editorial review.
 
-The **Rooms** panel includes translated creation/joining labels and explicitly shows that no server is connected. Those online actions are disabled; this update does not introduce multiplayer or pretend that local stand-ins are online players.
+The **Rooms** panel creates and joins private online rooms when the separate server is running, with translated guest, team, readiness and host controls. Offline stand-ins remain exclusive to the local objective sandbox.
 
 Settings also provide **Auto / Low / Medium / High graphics**, **30 / 60 FPS render targets**, and **adaptive resolution**. Auto chooses Medium for coarse-pointer devices and High for desktop. Low removes shadows and small decorative details; Medium uses 512px shadows, High 1024px. Collision, bullet obstruction, objective sites and route geometry stay identical across tiers. Adaptive resolution reduces pixel count under a sustained render shortfall and cautiously restores it after healthy samples. The FPS HUD displays measured rendering rate, quality and resolution percentage. These are scalable budgets, not a promise of a particular frame rate on untested devices.
 

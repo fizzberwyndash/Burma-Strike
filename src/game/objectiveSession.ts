@@ -1,10 +1,10 @@
 import { PracticeEconomy } from './economy';
 import { WeaponInventory } from './weapons';
 import { LocalObjectiveAuthority } from './objective';
-import type { ObjectiveConfig } from './objective';
+import type { ObjectiveConfig, ObjectiveRosterPlayer } from './objective';
 
-/** Offline adapter: physics/damage observations are trusted here, never network payloads.
- * A networked game must place this adapter and the rule authority on its server. */
+/** Trusted adapter for offline Practice and authoritative server rooms.
+ * Physics/damage observations come from those adapters, never network payloads. */
 export class ObjectiveSession {
   readonly authority: LocalObjectiveAuthority;
   private economies = new Map<string, PracticeEconomy>();
@@ -15,8 +15,8 @@ export class ObjectiveSession {
   private awardedResult = '';
   private damageEvents = new Set<string>();
 
-  constructor(config: Partial<ObjectiveConfig> = {}) {
-    this.authority = new LocalObjectiveAuthority(config);
+  constructor(config: Partial<ObjectiveConfig> = {}, roster?: readonly ObjectiveRosterPlayer[]) {
+    this.authority = new LocalObjectiveAuthority(config, roster);
     this.sync();
   }
   get snapshot() { return this.authority.snapshot; }

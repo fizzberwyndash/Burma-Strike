@@ -1,0 +1,26 @@
+{
+  "name": "burma-strike-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.12" },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --import tsx --watch src/index.ts",
+    "build": "tsc --noEmit && esbuild src/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/index.js",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@colyseus/core": "0.18.27",
+    "@colyseus/ws-transport": "0.18.4",
+    "@colyseus/schema": "5.0.45",
+    "@babylonjs/core": "^8.0.0"
+  },
+  "devDependencies": {
+    "@colyseus/sdk": "0.18.9",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.0",
+    "typescript": "~5.7.3"
+  }
+}
