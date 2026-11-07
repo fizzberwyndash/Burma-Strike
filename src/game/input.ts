@@ -10,6 +10,7 @@ export interface InputCallbacks {
   onShop?: () => void;
   onInteract?: (held: boolean) => void;
   onScoreboard?: (held: boolean) => void;
+  onSpectatorCycle?: (direction: number) => void;
 }
 
 /** Owns desktop events; touch UI feeds its independent pointers into this class. */
@@ -64,7 +65,10 @@ export class GameInput {
   }
 
   public set active(value: boolean) {
-    if (this.disposed) return;
+    // The frame loop reasserts this flag while round-result UI remains usable.
+    // Clear held controls on the transition, without closing a scoreboard that
+    // the player opens after gameplay has already been disabled.
+    if (this.disposed || value === this.enabled) return;
     if (value && !this.enabled) this.pauseRequested = false;
     this.enabled = value;
     if (!value) this.clearState();
@@ -236,7 +240,7 @@ export class GameInput {
     }
     if (!this.active) return;
     if (this.shopOpen && (code === 'KeyF' || code === 'Tab')) return;
-    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'KeyR', 'Escape', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'KeyB', 'KeyN', 'KeyF', 'KeyV', 'Tab', 'ShiftLeft', 'ShiftRight'].includes(code)) {
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'KeyR', 'Escape', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'KeyB', 'KeyN', 'KeyF', 'KeyV', 'KeyQ', 'KeyE', 'Tab', 'ShiftLeft', 'ShiftRight'].includes(code)) {
       event.preventDefault();
     }
     if (code === 'Escape') {
@@ -251,6 +255,8 @@ export class GameInput {
     if (/^Digit[1-4]$/.test(code)) this.callbacks.onSlot?.(Number(code.slice(-1)));
     if (code === 'KeyN') this.callbacks.onPrimaryCycle?.();
     if (code === 'KeyV') this.callbacks.onInspect?.();
+    if (code === 'KeyQ') this.callbacks.onSpectatorCycle?.(-1);
+    if (code === 'KeyE') this.callbacks.onSpectatorCycle?.(1);
     if (code === 'KeyF') this.setInteract(true);
     if (code === 'Tab') this.setScoreboard(true);
   };

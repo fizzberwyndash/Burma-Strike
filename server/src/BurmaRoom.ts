@@ -29,7 +29,7 @@ export class BurmaRoom extends Room<{state:BurmaState}> {
   simulation:MatchSimulation|null=null;
   code='';hostId='';
   stage:OnlineSnapshot['stage']='lobby';
-  config:MatchConfiguration={mapId:'bagan-old-city',rounds:5,activeSite:'both'};
+  config:MatchConfiguration={mapId:'bagan-old-city',rounds:5,activeSite:'both',friendlyFire:false};
   private message='Private lobby — invite friends using your room code.';
   private order=0;
   private inputLimits=new Map<string,TokenBucket>();
@@ -122,10 +122,34 @@ export class BurmaRoom extends Room<{state:BurmaState}> {
     if(offenses>=12)client.leave(4008,'Too many invalid or excessive messages.');
   }
   private fail(client:Client,message:string){client.send('error',{message});}
+  private validRoster(client:Client):boolean {
+    const connected=[...this.players.values()].filter(player=>player.connected);
+    if(connected.length<2||!connected.some(player=>player.team==='attackers')||!connected.some(player=>player.team==='defenders')){
+      this.fail(client,'At least two connected players and one player on each team are required.');return false;
+    }
+    return true;
+  }
+  private startMatch(){
+    // Construct the replacement before releasing the previous simulation. A
+    // rematch keeps its private room and connections, never an old match identity.
+    const next=new MatchSimulation([...this.players.values()],{...this.config});
+    this.simulation?.dispose();this.simulation=next;
+    for(const player of this.players.values())if(!player.connected)this.simulation.disconnect(player.id);
+    this.stage='match';void this.lock();
+    const connected=[...this.players.values()].filter(player=>player.connected);
+    this.message=connected.filter(player=>player.team==='attackers').length!==connected.filter(player=>player.team==='defenders').length
+      ?'Match started with unbalanced teams.':'Match started.';
+  }
   private perform(client:Client,action:OnlineAction){
     const player=this.players.get(client.sessionId);
     if(!player?.connected)return;
     const host=client.sessionId===this.hostId;
+    if(action.type==='rematch'){
+      if(!host){this.fail(client,'Only the host can request a rematch.');return;}
+      if(this.stage!=='finished'||!this.simulation||action.matchId!==this.simulation.matchId){this.fail(client,'A rematch requires the current completed match.');return;}
+      if(!this.validRoster(client))return;
+      this.startMatch();return;
+    }
     if(action.type==='return-lobby'){
       if(!host){this.fail(client,'Only the host can return everyone to the lobby.');return;}
       if(this.stage==='match'){this.fail(client,'Finish the current match before returning to the lobby.');return;}
@@ -145,17 +169,13 @@ export class BurmaRoom extends Room<{state:BurmaState}> {
         }
         case 'configure':
           if(!host){this.fail(client,'Only the host can configure the match.');return;}
-          this.config={...action.config};for(const p of this.players.values())p.ready=false;this.message='Match settings updated. Confirm readiness again.';return;
+          this.config={...action.config,friendlyFire:action.config.friendlyFire??false};for(const p of this.players.values())p.ready=false;this.message='Match settings updated. Confirm readiness again.';return;
         case 'start':{
           if(!host){this.fail(client,'Only the host can start the match.');return;}
           const connected=[...this.players.values()].filter(p=>p.connected);
-          if(connected.length<2||!connected.some(p=>p.team==='attackers')||!connected.some(p=>p.team==='defenders')){this.fail(client,'At least two connected players and one player on each team are required.');return;}
+          if(!this.validRoster(client))return;
           if(connected.some(p=>!p.ready)){this.fail(client,'Every connected player must be ready.');return;}
-          // Reserved disconnected seats stay in the trusted roster and cannot gain a fresh life by reconnecting.
-          this.simulation=new MatchSimulation([...this.players.values()],this.config);
-          for(const p of this.players.values())if(!p.connected)this.simulation.disconnect(p.id);
-          this.stage='match';
-          void this.lock();this.message=connected.filter(p=>p.team==='attackers').length!==connected.filter(p=>p.team==='defenders').length?'Match started with unbalanced teams.':'Match started.';
+          this.startMatch();
           return;
         }
         default:this.fail(client,'Start the match before using gameplay actions.');return;
@@ -189,6 +209,7 @@ export class BurmaRoom extends Room<{state:BurmaState}> {
         alive:true,health:100,armor:0,kills:0,deaths:0,lastInput:0,deviceEquipped:false};
     });
     return {version:NETWORK_VERSION,code:this.code,hostId:this.hostId,serverTime:Date.now(),stage:this.stage,config:{...this.config},players,
+      matchId:this.simulation?.matchId??'',roundHistory:this.simulation?.roundHistory??[],
       objective:this.simulation?.snapshot??null,message:this.message};
   }
   private publish(){this.state.snapshotJson=JSON.stringify(this.getSnapshot());}

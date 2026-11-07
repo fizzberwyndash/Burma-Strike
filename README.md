@@ -27,7 +27,7 @@ Open the address printed by Vite (normally port 4173 for preview).
 
 ## Private online custom matches
 
-See [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md) for setup, room codes, 2-player/2v1/5v5 tests, server authority, reconnection, modified files and current limitations. Keep `npm run server:start` (after `npm run server:build`) and `npm run dev` running in separate terminals. Install backend dependencies first with `npm --prefix server ci`. Existing Practice modes work independently of the server.
+See [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md) for setup, room codes, 2-player/2v1/5v5 tests, server authority, reconnection, modified files and current limitations. Keep `npm run server:start` (after `npm run server:build`) and `npm run dev` running in separate terminals. Install backend dependencies first with `npm --prefix server ci`. Existing Practice modes work independently of the server. Tactical rooms also include host-controlled friendly fire, server round history, teammate spectating after death and a same-room rematch flow; see the guide for controls and rules.
 
 ## Desktop controls
 
@@ -48,6 +48,7 @@ See [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md) for setup, room codes, 2-player/2
 | Equip Royal Signal Core | 4 (designated carrier) |
 | Plant / defuse / recover | Hold F when eligible |
 | Scoreboard | Hold Tab |
+| Watch previous / next living teammate after death online | Q / E |
 
 Practice has three 100-HP dummies. Body hits deal 34 damage; headshots deal 100. Dummies respawn after three seconds. Walls, gates, and crates stop bullets and player movement. The SHWE-9 pistol starts with a 12-round magazine and 48 reserve rounds. Reload takes 1.6 seconds. Use **Esc → Reset Range & Resupply** to restore ammunition and scores. In Free Range, health stays at 100 because targets do not attack. Economy Drill provides a real HP/armor damage path through its explicitly labeled local test controls.
 
@@ -118,9 +119,9 @@ In a live drill, open the shop and press **Test 40 Damage**. With Light Armor, H
 
 ### Authority and online boundaries
 
-Offline Practice is separate from the new private-room server in `server/`. `PracticeEconomy` is explicitly local-only and never sends or claims real online purchases. Credits, HP, armor, ownership and refund receipts are private fields, changed only through validated commands; the React UI gets immutable copied snapshots and has no balance/armor setters. Credits and armor are **not** restored from localStorage. Browser owners can ultimately alter their own offline runtime; this is not an anti-cheat or server-security claim.
+Offline Practice is separate from the private-room server in `server/`. Its local `PracticeEconomy` instance never sends or claims online purchases. Credits, HP, armor, ownership and refund receipts are private fields, changed only through validated commands; the React UI gets immutable copied snapshots and has no balance/armor setters. Credits and armor are **not** restored from localStorage. Browser owners can ultimately alter their own offline runtime; this is not an anti-cheat or server-security claim.
 
-`EconomyCommand`, `EconomySnapshot` and the pure rules isolate the authority from presentation. Any future online implementation must execute these rules on the authenticated server, validate phase, balances, item IDs, ownership, equip commands and authoritative elimination/round IDs, and broadcast server snapshots. Local simulation commands and the damage/outcome buttons must never be accepted as authoritative network rewards.
+`EconomyCommand`, `EconomySnapshot` and the pure rules isolate authority from presentation. The online server runs its own economy instance for each connected identity, validates phase, balances, item IDs, ownership, equip commands and elimination/round IDs, and broadcasts authoritative snapshots. Local damage/outcome controls cannot award online rewards. Guest identities use room connections and reconnect tokens; account authentication is not implemented.
 
 ### Economy verification
 

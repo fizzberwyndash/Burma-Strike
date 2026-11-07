@@ -81,3 +81,10 @@ test('environment configuration rejects wildcard origins and invalid deployment 
     assert.throws(() => readConfiguration(env));
   }
 });
+
+test('friendly fire requires a boolean and rematch is bound to a concrete match identity',()=>{
+  assert.deepEqual(validateConfiguration({mapId:'bagan-old-city',rounds:3,activeSite:'both',friendlyFire:true}),{mapId:'bagan-old-city',rounds:3,activeSite:'both',friendlyFire:true});
+  assert.equal(validateConfiguration({mapId:'bagan-old-city',rounds:3,activeSite:'both',friendlyFire:'true'}),null);
+  assert.deepEqual(validateAction({type:'rematch',matchId:'current-match'}),{type:'rematch',matchId:'current-match'});
+  for(const value of [{type:'rematch'},{type:'rematch',matchId:''},{type:'rematch',matchId:'x'.repeat(129)},{type:'rematch',matchId:'current',host:true}])assert.equal(validateAction(value),null);
+});

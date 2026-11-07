@@ -3,11 +3,14 @@ import { ArrowRight, ChevronDown, Flag, Heart, MapPin, Radio, RotateCcw, Shield,
 import { OBJECTIVE_SITES } from '../game/objective';
 import type { ObjectiveConfig, ObjectiveSnapshot } from '../game/objective';
 import { useI18n } from '../i18n';
+import type { OnlineRoundRecord, OnlineSnapshot } from '../network/protocol';
 
 type Point = { x: number; y: number; z: number };
 
 interface ObjectiveHudProps {
   online?: boolean;
+  onlineSnapshot?: OnlineSnapshot | null;
+  spectating?: boolean;
   snapshot: ObjectiveSnapshot;
   controlledId: string;
   objectiveEquipped: boolean;
@@ -29,7 +32,7 @@ const clock = (seconds: number) => `${Math.floor(Math.max(0, Math.ceil(seconds))
 const mapPoint = (point: Point) => ({ x: 12 + (point.x + 27) / 54 * 156, y: 168 - (point.z + 20) / 50 * 156 });
 
 /** A read-only view of rule snapshots. No UI timer decides a round outcome. */
-export default function ObjectiveHud({ online = false, snapshot, controlledId, objectiveEquipped, interactHeld, scoreboard, canInteract, interactLabel, position, touch, onEquip, onInteract, onScoreboard, onNextRound, onRematch }: ObjectiveHudProps) {
+export default function ObjectiveHud({ online = false, onlineSnapshot, spectating = false, snapshot, controlledId, objectiveEquipped, interactHeld, scoreboard, canInteract, interactLabel, position, touch, onEquip, onInteract, onScoreboard, onNextRound, onRematch }: ObjectiveHudProps) {
   const { t } = useI18n();
   const pointer = useRef<number | null>(null);
   const interactCallback = useRef(onInteract);
@@ -106,13 +109,33 @@ export default function ObjectiveHud({ online = false, snapshot, controlledId, o
       </button>
     </div>}
 
-    {!player?.alive && snapshot.phase !== 'result' && <div className="objective-eliminated"><Shield size={17} /><strong>{t('YOU ARE ELIMINATED')}</strong><span>{t(online ? 'Wait for the next round. Your team can still complete the objective.' : 'Esc → Sandbox controls to observe another role.')}</span></div>}
+    {!spectating && !player?.alive && snapshot.phase !== 'result' && <div className="objective-eliminated"><Shield size={17} /><strong>{t('YOU ARE ELIMINATED')}</strong><span>{t(online ? 'Wait for the next round. Your team can still complete the objective.' : 'Esc → Sandbox controls to observe another role.')}</span></div>}
     {snapshot.message && !interaction && snapshot.phase !== 'result' && <div className="objective-message" role="status">{t(snapshot.message)}</div>}
 
-    {scoreboard && <div className="objective-scoreboard" role="dialog" aria-label={t(online ? 'Online match scoreboard' : 'Local objective scoreboard')}><header><div><span>{t(online ? 'PRIVATE ONLINE MATCH' : 'LOCAL OBJECTIVE SANDBOX')}</span><h2>{t('ROYAL SIGNAL CORE')}</h2></div><button aria-label={t('Close scoreboard')} onClick={() => onScoreboard(false)}><X size={19} /></button></header><div className="objective-score-summary"><span>{t('ROUND {round}', { round: snapshot.round })}</span><strong>{snapshot.scores.attackers} <small>{t('ATTACKERS / DEFENDERS')}</small> {snapshot.scores.defenders}</strong><span>{online ? `${snapshot.players.filter(item => item.team === 'attackers').length}v${snapshot.players.filter(item => item.team === 'defenders').length}` : snapshot.config.format}</span></div>{(['attackers', 'defenders'] as const).map(team => <section key={team} className={`objective-score-team ${team}`}><h3>{t(teamName(team))}</h3>{snapshot.players.filter(item => item.team === team).map(item => <div className={`objective-score-row ${item.id === controlledId ? 'you' : ''}`} key={item.id}><span><b>{online ? item.name : t(item.name)}</b>{item.id === controlledId && <small>{t('YOU')}</small>}{item.id === snapshot.carrierId && <Radio size={13} />}</span><span>{t(!item.connected ? 'DISCONNECTED' : item.alive ? 'ACTIVE' : 'ELIMINATED')}</span><strong aria-label={t('Health {health}', { health: item.health })}>{item.health} <Heart size={10} /></strong></div>)}</section>)}<footer>{t(online ? 'Connected humans · the server controls damage, equipment, rounds and results.' : 'Offline drill · all roles are simulated locally. Esc opens role and rule test controls.')}</footer></div>}
+    {scoreboard && <div className={`objective-scoreboard ${online ? 'online-scoreboard' : ''}`} role="dialog" aria-label={t(online ? 'Online match scoreboard' : 'Local objective scoreboard')}>
+      <header><div><span>{t(online ? 'PRIVATE ONLINE MATCH' : 'LOCAL OBJECTIVE SANDBOX')}</span><h2>{t('ROYAL SIGNAL CORE')}</h2></div><button aria-label={t('Close scoreboard')} onClick={() => onScoreboard(false)}><X size={19} /></button></header>
+      <div className="objective-score-summary"><span>{t('ROUND {round}', { round: snapshot.round })}</span><strong>{snapshot.scores.attackers} <small>{t('ATTACKERS / DEFENDERS')}</small> {snapshot.scores.defenders}</strong><span>{online ? `${snapshot.players.filter(item => item.team === 'attackers').length}v${snapshot.players.filter(item => item.team === 'defenders').length}` : snapshot.config.format}</span></div>
+      {online && <p className={`friendly-fire-state ${onlineSnapshot?.config.friendlyFire ? 'enabled' : ''}`}>{t(onlineSnapshot?.config.friendlyFire ? 'FRIENDLY FIRE ENABLED' : 'FRIENDLY FIRE DISABLED')}</p>}
+      {(['attackers', 'defenders'] as const).map(team => <section key={team} className="objective-score-team"><h3>{t(teamName(team))}</h3>{online ? <div className="objective-score-table-scroll"><table className="objective-score-table" aria-label={t('{team} player statistics', { team: t(teamName(team)) })}>
+        <thead><tr>{['PLAYER', 'STATUS', 'KILLS', 'DEATHS', 'CREDITS', 'HEALTH', 'ARMOR'].map(label => <th key={label} scope="col">{t(label)}</th>)}</tr></thead>
+        <tbody>{snapshot.players.filter(item => item.team === team).map(item => {
+          const account = onlineSnapshot?.players.find(entry => entry.id === item.id);
+          return <tr className={`objective-score-row ${item.id === controlledId ? 'you' : ''}`} key={item.id}><th scope="row"><b>{item.name}</b>{item.id === controlledId && <small>{t('YOU')}</small>}{item.id === snapshot.carrierId && <Radio size={12} aria-label={t('ROYAL SIGNAL CORE')} />}</th><td>{t(!item.connected ? 'DISCONNECTED' : item.alive ? 'ACTIVE' : 'ELIMINATED')}</td><td>{account?.kills ?? 0}</td><td>{account?.deaths ?? 0}</td><td>{(account?.economy.credits ?? 0).toLocaleString()}</td><td>{Math.ceil(account?.health ?? item.health)}</td><td>{Math.ceil(account?.armor ?? 0)}</td></tr>;
+        })}</tbody>
+      </table></div> : snapshot.players.filter(item => item.team === team).map(item => <div className={`objective-score-row ${item.id === controlledId ? 'you' : ''}`} key={item.id}><span><b>{t(item.name)}</b>{item.id === controlledId && <small>{t('YOU')}</small>}{item.id === snapshot.carrierId && <Radio size={13} />}</span><span>{t(!item.connected ? 'DISCONNECTED' : item.alive ? 'ACTIVE' : 'ELIMINATED')}</span><strong aria-label={t('Health {health}', { health: item.health })}>{Math.ceil(item.health)} <Heart size={10} /></strong></div>)}</section>)}
+      {online && <RoundHistory entries={onlineSnapshot?.roundHistory ?? []} />}
+      <footer>{t(online ? 'Connected humans · the server controls damage, equipment, rounds and results.' : 'Offline drill · all roles are simulated locally. Esc opens role and rule test controls.')}</footer>
+    </div>}
 
-    {(snapshot.phase === 'result' || snapshot.phase === 'transition') && <div className="objective-result" role="status"><section><Radio size={26} /><span className="objective-result-eyebrow">{t('ROYAL SIGNAL CORE / ROUND {round}', { round: snapshot.round })}</span><h2>{snapshot.result ? t(snapshot.result.winner === 'attackers' ? 'ATTACKERS WIN' : 'DEFENDERS WIN') : t('NEXT ROUND')}</h2><p>{t(snapshot.result?.reason.replace(/[-_]/g, ' ') ?? 'Preparing the fortress for the next deployment.')}</p><div className="objective-result-score"><span>{t('ATTACKERS')} <b>{snapshot.scores.attackers}</b></span><i /> <span>{t('DEFENDERS')} <b>{snapshot.scores.defenders}</b></span></div>{!online && snapshot.phase === 'result' && <div className="objective-result-actions"><button onClick={onNextRound}>{t('NEXT ROUND')} <ArrowRight size={16} /></button><button onClick={onRematch}><RotateCcw size={14} /> {t('REMATCH')}</button></div>}<small>{t(online ? 'SERVER ROUND RESOLVED · NEXT ROUND STARTS AUTOMATICALLY' : 'LOCAL SANDBOX · NEXT ROUND OR REMATCH TO CONTINUE')}</small></section></div>}
+    {(snapshot.phase === 'result' || snapshot.phase === 'transition') && <div className="objective-result" role="status"><section><Radio size={26} /><span className="objective-result-eyebrow">{t('ROYAL SIGNAL CORE / ROUND {round}', { round: snapshot.round })}</span><h2>{snapshot.result ? t(snapshot.result.winner === 'attackers' ? 'ATTACKERS WIN' : 'DEFENDERS WIN') : t('NEXT ROUND')}</h2><p>{t(snapshot.result?.reason.replace(/[-_]/g, ' ') ?? 'Preparing the fortress for the next deployment.')}</p><div className="objective-result-score"><span>{t('ATTACKERS')} <b>{snapshot.scores.attackers}</b></span><i /> <span>{t('DEFENDERS')} <b>{snapshot.scores.defenders}</b></span></div>{!online && snapshot.phase === 'result' && <div className="objective-result-actions"><button onClick={onNextRound}>{t('NEXT ROUND')} <ArrowRight size={16} /></button><button onClick={onRematch}><RotateCcw size={14} /> {t('REMATCH')}</button></div>}<small>{t(online ? onlineSnapshot?.stage === 'finished' ? 'MATCH COMPLETE · OPEN ROOM FOR REMATCH' : 'SERVER ROUND RESOLVED · NEXT ROUND STARTS AUTOMATICALLY' : 'LOCAL SANDBOX · NEXT ROUND OR REMATCH TO CONTINUE')}</small></section></div>}
   </div>;
+}
+
+
+/** Server-recorded results only; the client never appends inferred round wins. */
+export function RoundHistory({ entries }: { entries: readonly OnlineRoundRecord[] }) {
+  const { t } = useI18n();
+  return <section className="round-history" aria-label={t('Round history')}><h3>{t('ROUND HISTORY')}</h3>{entries.length ? <ol>{[...entries].reverse().map(entry => <li key={entry.id} className={`round-history-entry ${entry.winner}`}><span className="history-round">{t('ROUND {round}', { round: entry.round })}</span><div><strong>{t(entry.winner === 'attackers' ? 'ATTACKERS WIN' : 'DEFENDERS WIN')}</strong><small>{t(entry.reason)}</small></div><span className="history-site">{entry.plantedSite ? t('SITE {site}', { site: entry.plantedSite }) : t('NO PLANT')}</span><b>{entry.scores.attackers} : {entry.scores.defenders}</b></li>)}</ol> : <p>{t('Completed rounds will appear here.')}</p>}</section>;
 }
 
 interface SandboxPanelProps {

@@ -38,6 +38,7 @@ function GameShell({ settings, setSettings }: { settings: GameSettings; setSetti
   const [shopPresent, setShopPresent] = useState(false);
   const network = useRef<OnlineClient | null>(null);
   const attachedSession = useRef('');
+  const attachedMatch = useRef('');
   const [roomView, setRoomView] = useState<'create' | 'join'>('create');
   const [connection, setConnection] = useState<ConnectionState>({ status: 'disconnected', snapshot: null, sessionId: '', error: '', reconnectAvailable: false });
 
@@ -88,17 +89,22 @@ function GameShell({ settings, setSettings }: { settings: GameSettings; setSetti
     const stage = connection.snapshot?.stage;
     if (!client || !ready || !game.current) return;
     if ((stage === 'match' || stage === 'finished') && connection.sessionId) {
-      if (attachedSession.current !== connection.sessionId) {
+      const newSession = attachedSession.current !== connection.sessionId;
+      const newMatch = !!connection.snapshot?.matchId && attachedMatch.current !== connection.snapshot.matchId;
+      if (newSession) {
         game.current.attachOnline(client); attachedSession.current = connection.sessionId;
+      }
+      if (newSession || (stage === 'match' && newMatch)) {
+        attachedMatch.current = connection.snapshot?.matchId ?? '';
         game.current.setMode('playing'); setMode('playing'); setDialog(null);
       }
     } else if (attachedSession.current) {
-      game.current.detachOnline(); attachedSession.current = '';
+      game.current.detachOnline(); attachedSession.current = ''; attachedMatch.current = '';
       game.current.setMode('menu'); setMode('menu'); setShopOpen(false);
       setDialog(connection.snapshot ? 'rooms' : null);
     }
     if (stage === 'finished') setDialog('rooms');
-  }, [connection.snapshot?.stage, connection.sessionId, ready]);
+  }, [connection.snapshot?.stage, connection.snapshot?.matchId, connection.sessionId, ready]);
   useEffect(() => {
     if (connection.status === 'reconnecting' && attachedSession.current) setMode('paused');
   }, [connection.status]);
@@ -110,7 +116,7 @@ function GameShell({ settings, setSettings }: { settings: GameSettings; setSetti
   }
   async function localMode(start: () => void) {
     if (connection.snapshot) await network.current?.leave();
-    game.current?.detachOnline(); attachedSession.current = '';
+    game.current?.detachOnline(); attachedSession.current = ''; attachedMatch.current = '';
     start(); play();
   }
   function playFree() { void localMode(() => game.current?.startFreePractice()); }
@@ -118,7 +124,7 @@ function GameShell({ settings, setSettings }: { settings: GameSettings; setSetti
   function objectiveSandbox() { void localMode(() => game.current?.startObjectiveSandbox()); }
   function openRooms(view: 'create' | 'join') { setRoomView(view); setDialog('rooms'); }
   async function leaveRoom() {
-    await network.current?.leave(); game.current?.detachOnline(); attachedSession.current = '';
+    await network.current?.leave(); game.current?.detachOnline(); attachedSession.current = ''; attachedMatch.current = '';
     game.current?.setMode('menu'); setMode('menu'); setDialog(null); setShopOpen(false);
   }
   function restart() { if (hud.objective) game.current?.rematchObjective(); else game.current?.restart(); play(); }
@@ -177,19 +183,24 @@ function GameShell({ settings, setSettings }: { settings: GameSettings; setSetti
       <div className="hud-top"><div className="range-label"><Crosshair size={18} /><div><strong>{hud.objective ? t('SIGNAL CORE / ROUND {round}', { round: hud.objective.round }) : hud.economyMode ? t('LOCAL DRILL / ROUND {round}', { round: hud.round }) : t('PRACTICE RANGE')}</strong><small>{hud.objective ? t(hud.online ? 'PRIVATE ONLINE MATCH' : 'LOCAL OBJECTIVE SANDBOX') : hud.economyMode ? t('{phase} PHASE · {credits} CREDITS', { phase: t(hud.phase.toUpperCase()), credits: hud.credits.toLocaleString() }) : t('BAGAN OLD CITY')}</small><span className="location-callout"><MapPin size={10} />{t(hud.location)}</span></div></div><div className="range-score"><span>{t('ELIMINATIONS')}<b>{String(hud.kills).padStart(2, '0')}</b></span><span>{t('ACCURACY')}<b>{hud.shots ? Math.round(hud.hits / hud.shots * 100) : 0}%</b></span></div><button className="pause-button" onClick={() => setMode('paused')} aria-label={t('Pause game')}><Pause size={18} /><span>ESC</span></button></div>
       {mode === 'playing' && !shopOpen && <>
         {hud.economyMode && !hud.objective && hud.phase !== 'live' && <button className="buy-phase-hint" onClick={() => game.current?.openShop()} aria-label={t('Open armory for round controls')}><ShoppingBag size={15} /><span><strong>{t(hud.phase === 'buy' ? 'BUY PHASE' : 'ROUND COMPLETE')}</strong><small>{t(hud.phase === 'buy' ? 'OPEN ARMORY · START ROUND TO FIRE' : 'OPEN ARMORY · PREPARE NEXT ROUND')}</small></span><ArrowRight size={15} /></button>}
-        <div className={`crosshair ${hud.ads ? 'aiming' : ''}`} aria-hidden="true"><i /><i /><i /><i /><b /></div>
-        {hud.ads && hud.weaponKind === 'sniper' && <div className="scope-overlay" aria-hidden="true"><div className="scope-reticle"><i /><b /></div></div>}
-        {performance.now() - hud.hitAt < 230 && hud.hitAt > 0 && <div className={`hit-marker ${hud.headshot ? 'headshot' : ''}`}><X size={36} strokeWidth={1.5} />{hud.headshot && <small>{t('HEADSHOT')}</small>}</div>}
-        {hud.action !== 'ready' && <div className={`reload-notice action-${hud.action}`}>{hud.reloading && <RotateCcw size={14} />}{t(actionLabel)}</div>}
+        {!hud.spectator && <div className={`crosshair ${hud.ads ? 'aiming' : ''}`} aria-hidden="true"><i /><i /><i /><i /><b /></div>}
+        {!hud.spectator && hud.ads && hud.weaponKind === 'sniper' && <div className="scope-overlay" aria-hidden="true"><div className="scope-reticle"><i /><b /></div></div>}
+        {!hud.spectator && performance.now() - hud.hitAt < 230 && hud.hitAt > 0 && <div className={`hit-marker ${hud.headshot ? 'headshot' : ''}`}><X size={36} strokeWidth={1.5} />{hud.headshot && <small>{t('HEADSHOT')}</small>}</div>}
+        {!hud.spectator && hud.action !== 'ready' && <div className={`reload-notice action-${hud.action}`}>{hud.reloading && <RotateCcw size={14} />}{t(actionLabel)}</div>}
         {!touch && !hud.locked && hud.objective?.phase !== 'result' && hud.objective?.phase !== 'transition' && <button className="capture-prompt" onClick={() => game.current?.input.requestPointerLock()}><Mouse size={17} />{t('CLICK TO CAPTURE MOUSE')}<span>{t('ESC TO PAUSE')}</span></button>}
-        {touch && game.current && <TouchControls input={game.current.input} onShoot={() => game.current?.shoot()} onReload={() => game.current?.reload()} onJump={() => game.current?.jump()} onSlot={slot => game.current?.equipSlot(slot)} onInspect={() => game.current?.inspect()} onPrimaryCycle={() => game.current?.cyclePrimary()} slot={hud.slot} primaryName={primaryLabel} ownedSlots={hud.economyMode ? [1, 2, 3].filter(ownsSlot) : undefined} />}
+        {touch && !hud.spectator && game.current && <TouchControls input={game.current.input} onShoot={() => game.current?.shoot()} onReload={() => game.current?.reload()} onJump={() => game.current?.jump()} onSlot={slot => game.current?.equipSlot(slot)} onInspect={() => game.current?.inspect()} onPrimaryCycle={() => game.current?.cyclePrimary()} slot={hud.slot} primaryName={primaryLabel} ownedSlots={hud.economyMode ? [1, 2, 3].filter(ownsSlot) : undefined} />}
       </>}
-      <div className="hud-bottom"><div className="health"><Shield size={23} /><strong>{Math.ceil(hud.health)}</strong><div><span>{t('HEALTH')}</span><i /></div></div><div className="armor-hud" aria-label={t('Armor {points} points', { points: Math.ceil(hud.armor) })}><ShieldCheck size={21} /><strong>{Math.ceil(hud.armor)}</strong><span>{t('ARMOR')}</span></div><div className="weapon-readout"><div className="ammo"><strong className={hud.objectiveEquipped ? 'objective-ammo' : hud.weaponKind !== 'knife' && hud.ammo <= 3 ? 'low-ammo' : ''}>{hud.objectiveEquipped ? t('CORE') : hud.weaponKind === 'knife' ? '∞' : String(hud.ammo).padStart(2, '0')}</strong>{!hud.objectiveEquipped && hud.weaponKind !== 'knife' && <span>/ {String(hud.reserve).padStart(2, '0')}</span>}</div><div><strong>{t(hud.weaponName)}</strong><small>{hud.objectiveEquipped ? t('HOLD F IN AN ACTIVE SITE TO ARM') : hud.weaponKind !== 'knife' && hud.reserve === 0 && hud.ammo === 0 ? t('PAUSE → RESET RANGE TO RESUPPLY') : hud.weaponKind === 'knife' ? t('MELEE · CLOSE RANGE') : `${t(hud.weaponKind.toUpperCase())} · ${t(hud.ads ? 'ADS' : 'HIP FIRE')}`}</small></div></div></div>
-      {!touch && <div className="weapon-slot-strip" aria-label={t('Weapon inventory')}>{([{ slot: 1, label: primaryLabel }, { slot: 2, label: 'PISTOL' }, { slot: 3, label: 'KNIFE' }] as const).map(item => <button key={item.slot} disabled={!ownsSlot(item.slot)} className={hud.slot === item.slot ? 'selected' : ''} onClick={() => game.current?.equipSlot(item.slot)} aria-label={t('Equip {weapon}', { weapon: t(item.label) })}><kbd>{item.slot}</kbd>{t(item.label)}</button>)}<button disabled={!hud.objective || hud.objective.carrierId !== hud.controlledId || hud.objective.coreState !== 'carried'} className={hud.objectiveEquipped ? 'selected' : ''} onClick={() => game.current?.equipSlot(4)} aria-label={t(hud.objective?.carrierId === hud.controlledId ? 'Equip Royal Signal Core' : 'Objective device not carried')}><kbd>4</kbd>{t(hud.objective?.carrierId === hud.controlledId && hud.objective.coreState === 'carried' ? 'SIGNAL CORE' : 'NO DEVICE')}</button></div>}
-      {!touch && <div className="control-strip">{[['W A S D', 'MOVE'], ['R', 'RELOAD'], ['SPACE', 'JUMP'], ['LMB / RMB', 'FIRE / ADS'], ['SHIFT', 'SPRINT'], ['V', 'INSPECT'], ['B', 'SHOP'], ...(hud.objective ? [['4 / F', 'CORE / INTERACT'], ['TAB', 'SCORE']] : [])].map(([key, label]) => <span key={key}><kbd>{key}</kbd>{t(label)}</span>)}</div>}
-      {hud.objective && mode === 'playing' && !shopOpen && <ObjectiveHud online={hud.online} snapshot={hud.objective} controlledId={hud.controlledId} objectiveEquipped={hud.objectiveEquipped} interactHeld={hud.interactHeld} scoreboard={hud.scoreboard} canInteract={hud.canInteract} interactLabel={hud.interactLabel} position={hud.playerPosition} touch={touch} onEquip={() => game.current?.equipSlot(4)} onInteract={held => game.current?.interact(held)} onScoreboard={held => game.current?.showScoreboard(held)} onNextRound={() => game.current?.nextObjectiveRound()} onRematch={() => game.current?.rematchObjective()} />}
+      <div className="hud-bottom"><div className="health"><Shield size={23} /><strong>{Math.ceil(hud.health)}</strong><div><span>{t('HEALTH')}</span><i /></div></div><div className="armor-hud" aria-label={t('Armor {points} points', { points: Math.ceil(hud.armor) })}><ShieldCheck size={21} /><strong>{Math.ceil(hud.armor)}</strong><span>{t('ARMOR')}</span></div>{!hud.spectator && <div className="weapon-readout"><div className="ammo"><strong className={hud.objectiveEquipped ? 'objective-ammo' : hud.weaponKind !== 'knife' && hud.ammo <= 3 ? 'low-ammo' : ''}>{hud.objectiveEquipped ? t('CORE') : hud.weaponKind === 'knife' ? '∞' : String(hud.ammo).padStart(2, '0')}</strong>{!hud.objectiveEquipped && hud.weaponKind !== 'knife' && <span>/ {String(hud.reserve).padStart(2, '0')}</span>}</div><div><strong>{t(hud.weaponName)}</strong><small>{hud.objectiveEquipped ? t('HOLD F IN AN ACTIVE SITE TO ARM') : hud.weaponKind !== 'knife' && hud.reserve === 0 && hud.ammo === 0 ? t('PAUSE → RESET RANGE TO RESUPPLY') : hud.weaponKind === 'knife' ? t('MELEE · CLOSE RANGE') : `${t(hud.weaponKind.toUpperCase())} · ${t(hud.ads ? 'ADS' : 'HIP FIRE')}`}</small></div></div>}</div>
+      {!touch && !hud.spectator && <div className="weapon-slot-strip" aria-label={t('Weapon inventory')}>{([{ slot: 1, label: primaryLabel }, { slot: 2, label: 'PISTOL' }, { slot: 3, label: 'KNIFE' }] as const).map(item => <button key={item.slot} disabled={!ownsSlot(item.slot)} className={hud.slot === item.slot ? 'selected' : ''} onClick={() => game.current?.equipSlot(item.slot)} aria-label={t('Equip {weapon}', { weapon: t(item.label) })}><kbd>{item.slot}</kbd>{t(item.label)}</button>)}<button disabled={!hud.objective || hud.objective.carrierId !== hud.controlledId || hud.objective.coreState !== 'carried'} className={hud.objectiveEquipped ? 'selected' : ''} onClick={() => game.current?.equipSlot(4)} aria-label={t(hud.objective?.carrierId === hud.controlledId ? 'Equip Royal Signal Core' : 'Objective device not carried')}><kbd>4</kbd>{t(hud.objective?.carrierId === hud.controlledId && hud.objective.coreState === 'carried' ? 'SIGNAL CORE' : 'NO DEVICE')}</button></div>}
+      {!touch && !hud.spectator && <div className="control-strip">{[['W A S D', 'MOVE'], ['R', 'RELOAD'], ['SPACE', 'JUMP'], ['LMB / RMB', 'FIRE / ADS'], ['SHIFT', 'SPRINT'], ['V', 'INSPECT'], ['B', 'SHOP'], ...(hud.objective ? [['4 / F', 'CORE / INTERACT'], ['TAB', 'SCORE']] : [])].map(([key, label]) => <span key={key}><kbd>{key}</kbd>{t(label)}</span>)}</div>}
+      {hud.objective && mode === 'playing' && !shopOpen && <ObjectiveHud online={hud.online} onlineSnapshot={connection.snapshot} spectating={hud.spectator} snapshot={hud.objective} controlledId={hud.controlledId} objectiveEquipped={hud.objectiveEquipped} interactHeld={hud.interactHeld} scoreboard={hud.scoreboard} canInteract={hud.canInteract} interactLabel={hud.interactLabel} position={hud.playerPosition} touch={touch} onEquip={() => game.current?.equipSlot(4)} onInteract={held => game.current?.interact(held)} onScoreboard={held => game.current?.showScoreboard(held)} onNextRound={() => game.current?.nextObjectiveRound()} onRematch={() => game.current?.rematchObjective()} />}
+      {hud.online && hud.spectator && mode === 'playing' && !shopOpen && !dialog && <section className="spectator-panel" aria-label={t('Spectator controls')}>
+        <div><span>{t('YOU ARE ELIMINATED')}</span><strong className="spectator-name">{hud.spectatingName || t('WAITING FOR NEXT ROUND')}</strong><small>{t(hud.spectatingId ? 'WATCHING TEAMMATE' : 'No living teammate is available. You return at round start.')}</small></div>
+        <div className="spectator-actions"><button className="spectator-previous" aria-label={t('Watch previous teammate')} disabled={!hud.spectatorCanCycle} onClick={() => game.current?.cycleSpectator(-1)}><ChevronRight size={19} /></button><button className="spectator-next" aria-label={t('Watch next teammate')} disabled={!hud.spectatorCanCycle} onClick={() => game.current?.cycleSpectator(1)}><ChevronRight size={19} /></button></div>
+        {!touch && <p>{t('Q / E TO SWITCH · TAB FOR SCOREBOARD')}</p>}
+      </section>}
       {settings.showFps && <div className="fps-counter">{hud.fps} FPS<i />{t(hud.graphicsQuality.toUpperCase())} · {Math.round(100 / hud.renderScale)}%</div>}
-      {mode === 'playing' && !shopOpen && <button className="shop-launcher" onClick={() => game.current?.openShop()} aria-label={t('Open buy shop')}><ShoppingBag size={16} /><span>{t('SHOP')}</span>{hud.economyMode ? <strong><Coins size={11} />{hud.credits.toLocaleString()}</strong> : <kbd>B</kbd>}</button>}
+      {mode === 'playing' && !hud.spectator && !shopOpen && <button className="shop-launcher" onClick={() => game.current?.openShop()} aria-label={t('Open buy shop')}><ShoppingBag size={16} /><span>{t('SHOP')}</span>{hud.economyMode ? <strong><Coins size={11} />{hud.credits.toLocaleString()}</strong> : <kbd>B</kbd>}</button>}
     </>}
 
     {mode === 'paused' && !dialog && <div className="modal-backdrop"><section className={`dialog pause-dialog ${hud.objective ? 'objective-pause-dialog' : ''}`} role="dialog" aria-modal="true" aria-labelledby="pause-title">
@@ -211,7 +222,7 @@ function GameShell({ settings, setSettings }: { settings: GameSettings; setSetti
       <button className="solid-button dialog-back-button" onClick={() => setDialog(null)}>{t(mode === 'menu' ? 'BACK TO BASE' : 'BACK TO PAUSE')}<ArrowRight size={18} /></button>
     </section></div>}
     {(shopOpen || shopPresent) && mode !== 'menu' && <div inert={!shopOpen} aria-hidden={!shopOpen} className={`shop-presence ${shopOpen ? '' : 'is-closing'}`}><BuyMenu online={hud.online} active={shopOpen} objectiveMode={!!hud.objective} objectiveStatus={hud.objective ? t('{phase} · {seconds}s', { phase:t(hud.objective.phase.toUpperCase()), seconds:Math.ceil(hud.objective.remaining) }) : undefined} snapshot={hud.economy} onClose={() => game.current?.closeShop()} onBuy={id => game.current?.buyItem(id)} onSell={id => game.current?.sellItem(id)} onEquip={id => game.current?.shopEquipWeapon(id)} onStartDrill={economyDrill} onStartRound={() => game.current?.startRound()} onFinishRound={outcome => game.current?.finishRound(outcome)} onNewRound={() => game.current?.newRound()} onTestDamage={() => game.current?.testDamage(40)} /></div>}
-    {hud.online && mode !== 'menu' && !dialog && <div className={`online-session-status ${connection.status}`} role="status"><span>{t(connection.status === 'reconnecting' ? 'CONNECTION INTERRUPTED · RECONNECTING' : connection.status === 'error' ? 'CONNECTION ERROR' : 'PRIVATE ONLINE MATCH')}</span><strong>{connection.snapshot?.code}</strong>{connection.error && <small>{t(connection.error)}</small>}{connection.status === 'error' && connection.reconnectAvailable && <button onClick={() => void network.current?.reconnect()}>{t('REJOIN')}</button>}</div>}
+    {hud.online && mode !== 'menu' && !dialog && <div className={`online-session-status ${connection.status}`} role="status"><span>{t(connection.status === 'reconnecting' ? 'CONNECTION INTERRUPTED · RECONNECTING' : connection.status === 'error' ? 'CONNECTION ERROR' : 'PRIVATE ONLINE MATCH')}</span><strong>{connection.snapshot?.code}</strong><span className="online-friendly-fire">{t(connection.snapshot?.config.friendlyFire ? 'FRIENDLY FIRE ENABLED' : 'FRIENDLY FIRE DISABLED')}</span>{connection.error && <small>{t(connection.error)}</small>}{connection.status === 'error' && connection.reconnectAvailable && <button onClick={() => void network.current?.reconnect()}>{t('REJOIN')}</button>}</div>}
     {touch && <div className="rotate-notice"><div><Menu size={22} /><RotateCcw size={40} /><h2>{t('A WIDER HORIZON.')}</h2><p>{t('Rotate your device to landscape for the best practice experience.')}</p></div></div>}
     {error && <div className="error-notice" role="alert"><h2>{t('RENDERER UNAVAILABLE')}</h2><p>{t(error)}</p><button onClick={() => window.location.reload()}>{t('RETRY')}</button></div>}
   </main>;

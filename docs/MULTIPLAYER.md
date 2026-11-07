@@ -47,7 +47,7 @@ Mobile uses the existing landscape joystick, right-side drag aim, independent Fi
 
 ## Authority and reconnection
 
-The server accepts bounded movement/aim inputs and allowlisted actions. It advances movement at 60 Hz, applies acceleration/gravity/collision, and rejects client-declared positions, health, damage, credits or ownership. Input sequence numbers prevent old input replay; inactive input expires. Weapon ownership, draw/holster/reload, ammunition, rate of fire, ray hit/range, armor absorption, purchases, refunds, rewards and round results use shared rules on the server. Teammates obstruct shots but do not take friendly damage.
+The server accepts bounded movement/aim inputs and allowlisted actions. It advances movement at 60 Hz, applies acceleration/gravity/collision, and rejects client-declared positions, health, damage, credits or ownership. Input sequence numbers prevent old input replay; inactive input expires. Weapon ownership, draw/holster/reload, ammunition, rate of fire, ray hit/range, armor absorption, purchases, refunds, rewards and round results use shared rules on the server. Teammates always obstruct shots. Friendly damage is off by default; only the host can enable it in lobby settings before starting a match. When enabled, friendly hits consume armor and HP, but team kills never grant elimination credits or a positive kill count.
 
 `worldGeometry.json` contains the actual transformed solid triangles extracted from `buildMap`. Server collision and ray occlusion use Babylon's CPU collision/picking against those exact triangles; decorative skyline and dummies are excluded. Run `npm run world:generate` after map geometry changes; `npm run world:check` and tests detect stale data.
 
@@ -88,9 +88,13 @@ The combat section exercises purchases, shooting/armor, reloads, switching, ADS 
 
 ### Local verification
 
-Frontend build, all 10 frontend test files, current collision generation, backend build and all 21 backend tests pass. Backend tests use real HTTP/WebSocket connections and include ten clients sending 20 Hz controls, authoritative movement/speed bounds, purchases, armor, weapons, private joins, capacity/team limits, host migration, disconnections and reconnection expiry.
+Frontend build, frontend regression tests, current collision generation, backend build and all 35 backend tests pass. Backend tests use real HTTP/WebSocket connections and include ten clients sending 20 Hz controls, authoritative movement/speed bounds, purchases, armor, weapons, private joins, capacity/team limits, host migration, disconnections and reconnection expiry.
 
-Independent Chromium browser checks passed in sequence for two players, three players (2v1) and ten players (5v5). The ten-browser check confirmed nine remote avatars per client, host movement received by every peer and ten scoreboard entries, with no page exceptions. The mixed desktop/landscape-touch checks confirmed server damage (100 HP/25 armor to 87 HP/5 armor), reload/switch/ADS, simultaneous movement/aim/fire, jumping, four-second planting, six-second defusing and interruption. The isolated objective scenario also restored Practice to 12 pistol rounds, three dummies and zero remote avatars after leaving. These were local software-rendered/emulated tests; physical-device and public-internet performance remain untested.
+The tactical integration was checked in independent Chromium contexts: 1v1 passed purchases, hitscan elimination, win/loss credits, a persistent scoreboard, round history and same-room rematch. The 2v1 check passed friendly-fire protection, dead-player action blocking, interpolated teammate spectating, browser-reload reconnection without revival, host migration and a shared Defender victory. Both completed without page exceptions.
+
+The desktop/landscape-touch objective scenario also passed again after this integration: both clients walked real collision-resolved routes, releasing interaction cancelled planting and defusing, fresh uninterrupted four-/six-second holds planted and defused on the server, and Defenders won. Leaving restored Practice to 12 pistol rounds, three dummies and zero remote avatars, without page exceptions.
+
+Earlier synchronization checks passed for two, three and ten browser clients (5v5). The ten-client check confirmed nine remote avatars per client, movement received by every peer and ten scoreboard entries. Earlier mixed desktop/landscape-touch combat checks confirmed server damage (100 HP/25 armor to 87 HP/5 armor), reload/switch/ADS, simultaneous movement/aim/fire and jumping. These were local software-rendered/emulated tests; physical-device and public-internet performance remain untested.
 
 Main implementation files:
 
@@ -98,15 +102,36 @@ Main implementation files:
 - `server/src/BurmaRoom.ts`, `validation.ts`, `MatchSimulation.ts`: room membership/host/ready/team limits, validation/rate limits and authoritative matches.
 - `src/network/protocol.ts`, `client.ts`: shared wire types, SDK connections and reconnect lifecycle.
 - `src/shared/world.ts`, `worldGeometry.json`, `scripts/generate-world.mjs`: exact server collision and raycasting.
-- `src/game/game.ts`, `remotePlayers.ts`, `objectiveView.ts`: responsive local view and interpolated remote presentation.
+- `src/game/game.ts`, `remotePlayers.ts`, `spectator.ts`, `objectiveView.ts`: responsive local view and interpolated remote presentation.
 - `src/game/objective.ts`, `objectiveSession.ts`: backwards-compatible human rosters using the existing tested objective/economy rules.
 - `src/App.tsx`, `components/RoomPanel.tsx`, `ObjectiveHud.tsx`, `BuyMenu.tsx`, `styles.css`, `locales/multiplayer.ts`: English/Myanmar lobby, shop/scoreboard and online/offline UI boundaries.
-- `server/test/*.test.ts`, `tests/network-client.test.mjs`, `online-presentation.test.mjs`, `world.test.mjs`: network, authority, lifecycle and presentation regression coverage.
+- `server/test/*.test.ts`, `tests/network-client.test.mjs`, `online-presentation.test.mjs`, `spectator.test.mjs`, `world.test.mjs`: network, authority, lifecycle and presentation regression coverage.
 
 Version pins use the current compatible Colyseus 0.18 line: core 0.18.27, WebSocket transport 0.18.4, Schema 5.0.45 and SDK 0.18.9. APIs were checked against the official documentation source at commit 619b4c595aa8b148812d64e9d09d079ac4784e09 and published package typings: [Room lifecycle](https://docs.colyseus.io/room/lifecycle), [reconnection](https://docs.colyseus.io/room/reconnection), [visibility](https://docs.colyseus.io/matchmaker/visibility), [Schema](https://docs.colyseus.io/state/schema), [official source](https://github.com/colyseus/colyseus-docs).
 
+
+## Tactical match flow, history and spectating
+
+All buy/combat/plant/defuse/countdown clocks, weapon cooldowns, damage, armor, credits, purchases, eliminations and results continue to run on the server. The browser sends controls and action requests; there are no network commands that set damage, money, ownership, objective completion or the clock.
+
+The host can enable **Friendly Fire** in the lobby. It defaults to off, and changing it clears readiness. Clients cannot change this setting during a live match. The scoreboard shows authoritative kills, deaths, credits, HP and armor. **Round History** records each resolved round once, with winner, reason, planted site and cumulative score. Records belong to the current in-memory match; server restart, returning to the lobby and rematching clear them.
+
+After death, the camera follows a living connected teammate using interpolated poses. **Q / E** choose the previous/next teammate; mobile has corresponding buttons. With no living teammate, the camera uses a fixed team-side view and waits for the next round. It never follows an enemy. The dead player's collider and equipment remain authoritative and fixed; watching a teammate cannot move, fire, buy, equip or operate the core as that teammate. Scoreboard and pause controls remain available. Reconnecting restores the same dead life, not a respawn.
+
+Players become alive only when the server enters the next round's buy phase. The one-second transition retains the previous life state and positions; it does not briefly revive players. A player who disconnects/reconnects after a result also remains dead through transition. After planting, eliminating every Attacker still leaves Defenders responsible for defusing before the countdown expires.
+
+When the configured rounds finish, both teams see **Victory**, **Defeat** or **Match Draw**. The host's **Rematch** starts a new match without changing the private room code, team assignments or connected identities. It resets score/history, restores connected players' HP and ammunition and starts every player at 800 credits with the permanent knife. Initial Start still requires readiness; Rematch is the host's explicit finished-match action. Each match has a new server-generated ID, and duplicate/stale/non-host rematch requests cannot reset it again. Return to Lobby remains available for changing teams, sites, rounds or friendly fire.
+
+The new browser regression is:
+
+```sh
+python scripts/test-tactical-multiplayer.py --case all
+```
+
+It uses two windows for purchases, a real elimination, payouts, winner/loser UI, scoreboard/history and same-room rematch, then three windows for friendly-fire protection, dead-input rejection, teammate spectating and reconnect without revival. The existing objective browser scenario tests real walking, plant/cancel and defuse/cancel using desktop and landscape touch inputs. Browser scripts use read-only observations and actual input actions, never authority setters.
+
 ## Current limits
 
-This is a single-process, in-memory custom-room server. Server restart loses rooms, scores and reconnect reservations. There is no account authentication, database, public matchmaking, voice chat, spectators, mid-match new-player joining, region routing, Redis/multiworker coordination, ranked progression, automatic side swap or deployment automation. There is no server rewind/lag compensation or interest-management anti-wallhack system; all player positions are replicated for avatar rendering. A room code is an invitation mechanism, not a password/account security boundary.
+This is a single-process, in-memory custom-room server. Server restart loses rooms, scores and reconnect reservations. There is no account authentication, database, public matchmaking, voice chat, mid-match new-player joining, region routing, Redis/multiworker coordination, ranked progression, automatic side swap or deployment automation. There is no server rewind/lag compensation or interest-management anti-wallhack system; all player positions are replicated for avatar rendering. A room code is an invitation mechanism, not a password/account security boundary.
 
 The server foundations validate game rules; they do not claim comprehensive anti-cheat. Hardware/network latency tuning, internet-hosted sessions, physical mobile performance, non-Chromium browsers and native Burmese wording need further testing. No FPS guarantee is made from headless software rendering. No paid API is required.

@@ -28,6 +28,8 @@ export class RemotePlayers {
   private readonly flashMaterial: StandardMaterial;
   private readonly coreGlow: StandardMaterial;
   private roundKey = '';
+  private watchedId: string | null = null;
+  private matchVisible = false;
   private phase = 0;
   private disposed = false;
 
@@ -49,9 +51,10 @@ export class RemotePlayers {
 
   receive(snapshot: OnlineSnapshot, controlledId: string, now: number) {
     if (this.disposed) return;
-    const roundKey = `${snapshot.objective?.epoch}:${snapshot.objective?.round}`;
+    const roundKey = `${snapshot.matchId ?? ''}:${snapshot.objective?.epoch}:${snapshot.objective?.round}`;
     const newRound = roundKey !== this.roundKey;
     this.roundKey = roundKey;
+    this.matchVisible = snapshot.stage !== 'lobby';
     const present = new Set<string>();
     for (const player of snapshot.players) {
       if (player.id === controlledId) continue;
@@ -63,7 +66,7 @@ export class RemotePlayers {
       actor.player = player;
       actor.samples.push({ at: now, ...player.position, yaw: player.yaw, pitch: player.pitch });
       while (actor.samples.length > 10) actor.samples.shift();
-      actor.root.setEnabled(player.connected && snapshot.stage !== 'lobby');
+      actor.root.setEnabled(player.connected && this.matchVisible && player.id !== this.watchedId);
       const cloth = player.team === 'attackers' ? this.attacker : this.defender;
       actor.cloth.forEach(mesh => { mesh.material = cloth; });
       const weaponId = player.deviceEquipped ? 'objective' : player.inventory.weaponId;
@@ -96,6 +99,24 @@ export class RemotePlayers {
   }
 
   shot(playerId: string) { const actor = this.actors.get(playerId); if (actor) actor.flashTime = .06; }
+
+  /** First-person teammate view uses the already interpolated presentation pose.
+   * The caller must select an eligible teammate from its authoritative snapshot. */
+  getSpectatorPose(playerId: string): { position: {x:number;y:number;z:number}; yaw: number; pitch: number } | null {
+    const actor = this.actors.get(playerId);
+    if (!actor?.player.alive || !actor.player.connected) return null;
+    return {
+      position: { x:actor.root.position.x, y:actor.root.position.y + 1.6, z:actor.root.position.z },
+      yaw:actor.root.rotation.y, pitch:actor.upper.rotation.x / .55,
+    };
+  }
+
+  /** Hide only the followed avatar in this local scene so its head/vest cannot
+   * cover the camera. This never changes an authoritative player or hitbox. */
+  setSpectatedPlayer(playerId: string | null): void {
+    this.watchedId = playerId;
+    for (const [id, actor] of this.actors) actor.root.setEnabled(actor.player.connected && this.matchVisible && id !== playerId);
+  }
 
   private create(player: OnlinePlayer): RemoteActor {
     const root = new TransformNode(`remote-player:${player.id}`, this.scene);
@@ -165,6 +186,6 @@ export class RemotePlayers {
     actor.flash.position.z = pistol ? .25 : id === 'sniper' ? .72 : .59;
   }
   private remove(actor: RemoteActor) { actor.root.dispose(false, false); actor.labelMaterial.dispose(false, false); actor.labelTexture.dispose(); }
-  clear() { for (const actor of this.actors.values()) this.remove(actor); this.actors.clear(); this.roundKey = ''; }
+  clear() { for (const actor of this.actors.values()) this.remove(actor); this.actors.clear(); this.roundKey = ''; this.watchedId = null; this.matchVisible = false; }
   dispose() { if (this.disposed) return; this.disposed = true; this.clear(); for (const material of this.materials) material.dispose(); }
 }

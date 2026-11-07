@@ -4,6 +4,7 @@ import type { OnlineClient, ConnectionState } from '../network/client';
 import { normalizeGuestName } from '../network/client';
 import type { MatchConfiguration } from '../network/protocol';
 import { useI18n } from '../i18n';
+import { RoundHistory } from './ObjectiveHud';
 
 interface Props {
   client: OnlineClient | null;
@@ -14,7 +15,7 @@ interface Props {
 }
 
 const validUsername = (value: string) => { try { normalizeGuestName(value); return true; } catch { return false; } };
-const defaultConfig: MatchConfiguration = { mapId: 'bagan-old-city', rounds: 5, activeSite: 'both' };
+const defaultConfig: MatchConfiguration = { mapId: 'bagan-old-city', rounds: 5, activeSite: 'both', friendlyFire: false };
 
 /** The lobby displays server snapshots and sends intents; it never assigns teams,
  * changes credits or declares a match started on the client. */
@@ -26,12 +27,17 @@ export default function RoomPanel({ client, connection, initialView, onLeave, on
   });
   const [code, setCode] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [requestedRematch, setRequestedRematch] = useState('');
   const snapshot = connection.snapshot;
   const [config, setConfig] = useState<MatchConfiguration>(snapshot?.config ?? defaultConfig);
   useEffect(() => { setView(initialView); }, [initialView]);
   useEffect(() => {
     if (snapshot) setConfig(snapshot.config);
-  }, [snapshot?.config.mapId, snapshot?.config.rounds, snapshot?.config.activeSite]);
+  }, [snapshot?.config.mapId, snapshot?.config.rounds, snapshot?.config.activeSite, snapshot?.config.friendlyFire]);
+  useEffect(() => { setRequestedRematch(''); }, [snapshot?.matchId]);
+  useEffect(() => {
+    if (connection.error || connection.status !== 'connected') setRequestedRematch('');
+  }, [connection.error, connection.status]);
   const busy = connection.status === 'connecting' || connection.status === 'reconnecting';
   const connected = snapshot?.players.filter(player => player.connected) ?? [];
   const self = snapshot?.players.find(player => player.id === connection.sessionId);
@@ -42,7 +48,12 @@ export default function RoomPanel({ client, connection, initialView, onLeave, on
   const everyoneReady = connected.length >= 2 && connected.every(player => player.ready);
   const canStart = !!isHost && connection.status === 'connected' && snapshot?.stage === 'lobby' && everyoneReady && attackers > 0 && defenders > 0;
   const configValid = Number.isInteger(config.rounds) && config.rounds >= 1 && config.rounds <= 30;
-  const configurationChanged = snapshot && (snapshot.config.rounds !== config.rounds || snapshot.config.activeSite !== config.activeSite);
+  const configurationChanged = snapshot && (snapshot.config.rounds !== config.rounds || snapshot.config.activeSite !== config.activeSite || !!snapshot.config.friendlyFire !== !!config.friendlyFire);
+
+  const canRematch = !!isHost && connection.status === 'connected' && snapshot?.stage === 'finished' && connected.length >= 2 && attackers > 0 && defenders > 0 && requestedRematch !== snapshot.matchId;
+  const ownScore = self?.team === 'attackers' ? snapshot?.objective?.scores.attackers : snapshot?.objective?.scores.defenders;
+  const otherScore = self?.team === 'attackers' ? snapshot?.objective?.scores.defenders : snapshot?.objective?.scores.attackers;
+  const matchOutcome = ownScore === otherScore ? 'MATCH DRAW' : (ownScore ?? 0) > (otherScore ?? 0) ? 'VICTORY' : 'DEFEAT';
 
   async function connect() {
     if (!client || busy || !validUsername(username) || (view === 'join' && !/^[A-Z0-9]{6}$/.test(code))) return;
@@ -86,11 +97,13 @@ export default function RoomPanel({ client, connection, initialView, onLeave, on
       </div>)}{players.length === 0 && <div className="lobby-empty-team">{t('WAITING FOR A PLAYER')}</div>}</div></section>;
     })}</div>
     {snapshot.stage === 'lobby' && <>
-      <div className="lobby-config"><label>{t('GAME MAP')}<select aria-label={t('Game map')} value={config.mapId} disabled><option value="bagan-old-city">{t('BAGAN OLD CITY')}</option></select></label><label>{t('NUMBER OF ROUNDS')}<input aria-label={t('Number of rounds')} type="number" min={1} max={30} value={config.rounds} disabled={!isHost || busy} onChange={event => setConfig(value => ({ ...value, rounds: Number(event.target.value) }))} /></label><label>{t('ACTIVE SITES')}<select aria-label={t('Active sites')} value={config.activeSite} disabled={!isHost || busy} onChange={event => setConfig(value => ({ ...value, activeSite: event.target.value as MatchConfiguration['activeSite'] }))}><option value="both">{t('Both A and B')}</option><option value="A">{t('A only')}</option><option value="B">{t('B only')}</option></select></label>{isHost && <button className="outline-button apply-room-config" disabled={!configValid || !configurationChanged || busy} onClick={() => client?.sendAction({ type: 'configure', config })}>{t('APPLY ROOM SETTINGS')}</button>}</div>
+      <div className="lobby-config"><label>{t('GAME MAP')}<select aria-label={t('Game map')} value={config.mapId} disabled><option value="bagan-old-city">{t('BAGAN OLD CITY')}</option></select></label><label>{t('NUMBER OF ROUNDS')}<input aria-label={t('Number of rounds')} type="number" min={1} max={30} value={config.rounds} disabled={!isHost || busy} onChange={event => setConfig(value => ({ ...value, rounds: Number(event.target.value) }))} /></label><label>{t('ACTIVE SITES')}<select aria-label={t('Active sites')} value={config.activeSite} disabled={!isHost || busy} onChange={event => setConfig(value => ({ ...value, activeSite: event.target.value as MatchConfiguration['activeSite'] }))}><option value="both">{t('Both A and B')}</option><option value="A">{t('A only')}</option><option value="B">{t('B only')}</option></select></label><label className="lobby-friendly-fire"><input className="friendly-fire-toggle" type="checkbox" aria-label={t('Enable friendly fire')} checked={!!config.friendlyFire} disabled={!isHost || busy} onChange={event => setConfig(value => ({ ...value, friendlyFire: event.target.checked }))} /><span><strong>{t('FRIENDLY FIRE')}</strong><small>{t('Off by default. When enabled, shots can damage teammates.')}</small></span></label>{isHost && <button className="outline-button apply-room-config" disabled={!configValid || !configurationChanged || busy} onClick={() => client?.sendAction({ type: 'configure', config })}>{t('APPLY ROOM SETTINGS')}</button>}</div>
       <div className="lobby-start-requirements"><span>{t('At least two connected players, one on each team, must all be ready. Team changes and room settings clear ready status.')}</span>{attackers > 0 && defenders > 0 && attackers !== defenders && <strong className="unbalanced-warning">{t('UNBALANCED TEAMS · HOST MAY STILL START')}</strong>}</div>
     </>}
-    {snapshot.stage === 'finished' && <div className="lobby-match-complete"><h3>{t('MATCH COMPLETE')}</h3><strong>{snapshot.objective?.scores.attackers ?? 0} : {snapshot.objective?.scores.defenders ?? 0}</strong><p>{t('The server has completed the configured rounds. Return to the lobby to ready up for another match.')}</p></div>}
+    {snapshot.stage !== 'lobby' && <p className={`friendly-fire-state ${snapshot.config.friendlyFire ? 'enabled' : ''}`}>{t(snapshot.config.friendlyFire ? 'FRIENDLY FIRE ENABLED' : 'FRIENDLY FIRE DISABLED')}</p>}
+    {snapshot.stage === 'finished' && <div className={`lobby-match-complete outcome-${matchOutcome.toLowerCase().replace(/ /g, '-')}`}><span>{t('MATCH COMPLETE')}</span><h3 className="match-outcome">{t(matchOutcome)}</h3><strong>{snapshot.objective?.scores.attackers ?? 0} : {snapshot.objective?.scores.defenders ?? 0}</strong><p>{t('The server has completed the configured rounds. Rematch keeps this room and teams; credits and scores start fresh.')}</p></div>}
+    {snapshot.stage !== 'lobby' && <RoundHistory entries={snapshot.roundHistory ?? []} />}
     {snapshot.stage === 'match' && <p className="lobby-live-note">{t('Your match is running. The server clock continues while this menu is open.')}</p>}
-    <footer className="lobby-actions"><button className="outline-button leave-room" onClick={onLeave}><LogOut size={15} />{t('LEAVE ROOM')}</button>{snapshot.stage === 'lobby' ? <><button className={`outline-button ready-toggle ${self?.ready ? 'is-ready' : ''}`} aria-pressed={!!self?.ready} disabled={!self?.connected || busy} onClick={() => client?.sendAction({ type: 'ready', ready: !self?.ready })}><Check size={17} />{t(self?.ready ? 'CANCEL READY' : 'I AM READY')}</button>{isHost && <button className="solid-button start-online-match" disabled={!canStart || !!configurationChanged} onClick={() => client?.sendAction({ type: 'start' })}>{t('START MATCH')}<ArrowRight size={17} /></button>}</> : snapshot.stage === 'match' ? <button className="solid-button" onClick={onResume}>{t('RETURN TO MATCH')}<ArrowRight size={17} /></button> : isHost ? <button className="solid-button return-online-lobby" onClick={() => client?.sendAction({ type: 'return-lobby' })}>{t('RETURN TO LOBBY')}<ArrowRight size={17} /></button> : <span className="lobby-wait-host">{t('WAITING FOR HOST TO RETURN TO LOBBY')}</span>}</footer>
+    <footer className="lobby-actions"><button className="outline-button leave-room" onClick={onLeave}><LogOut size={15} />{t('LEAVE ROOM')}</button>{snapshot.stage === 'lobby' ? <><button className={`outline-button ready-toggle ${self?.ready ? 'is-ready' : ''}`} aria-pressed={!!self?.ready} disabled={!self?.connected || busy} onClick={() => client?.sendAction({ type: 'ready', ready: !self?.ready })}><Check size={17} />{t(self?.ready ? 'CANCEL READY' : 'I AM READY')}</button>{isHost && <button className="solid-button start-online-match" disabled={!canStart || !!configurationChanged} onClick={() => client?.sendAction({ type: 'start' })}>{t('START MATCH')}<ArrowRight size={17} /></button>}</> : snapshot.stage === 'match' ? <button className="solid-button" onClick={onResume}>{t('RETURN TO MATCH')}<ArrowRight size={17} /></button> : isHost ? <><button className="outline-button return-online-lobby" onClick={() => client?.sendAction({ type: 'return-lobby' })}>{t('RETURN TO LOBBY')}<ArrowRight size={17} /></button><button className="solid-button rematch-online-match" disabled={!canRematch} onClick={() => { setRequestedRematch(snapshot.matchId); client?.sendAction({ type: 'rematch', matchId: snapshot.matchId }); }}><RefreshCw size={16} />{t(requestedRematch === snapshot.matchId ? 'REQUESTING REMATCH' : 'REMATCH')}</button></> : <span className="lobby-wait-host">{t('WAITING FOR HOST TO REMATCH OR RETURN TO LOBBY')}</span>}</footer>
   </div>;
 }

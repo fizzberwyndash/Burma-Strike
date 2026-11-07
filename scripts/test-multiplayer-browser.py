@@ -121,7 +121,8 @@ def exercise(browser, base_url, count, output):
             page.wait_for_function('!document.querySelector(".buy-menu")', polling=100, timeout=35000)
         capture(host)
         host.evaluate("""async()=>{
-          const {OnlineClient}=await import('/src/network/client.ts');
+          const loaded=performance.getEntriesByType('resource').filter(entry=>entry.name.includes('/src/network/client.ts')).at(-1);
+ const {OnlineClient}=await import(loaded?.name??'/src/network/client.ts');
           const original=OnlineClient.prototype.sendInput;
           window.__burmaInputProbe={sent:[],self:null};
           OnlineClient.prototype.sendInput=function(input){

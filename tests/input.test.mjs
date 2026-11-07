@@ -12,7 +12,7 @@ function createInput() {
   win.matchMedia=()=>({matches:false});doc.pointerLockElement=canvas;doc.exitPointerLock=()=>{doc.pointerLockElement=null};
   const sandbox={exports:{},window:win,document:doc};vm.runInNewContext(outputText,sandbox);
   const calls=[];
-  const input=new sandbox.exports.GameInput(canvas,{onPause:()=>calls.push('pause'),onShoot:()=>calls.push('fire'),onReload:()=>calls.push('reload'),onJump:()=>calls.push('jump'),onSlot:n=>calls.push('slot'+n),onPrimaryCycle:()=>calls.push('cycle'),onInspect:()=>calls.push('inspect'),onAds:on=>calls.push('ads'+on),onShop:()=>calls.push('shop'),onInteract:held=>calls.push('interact'+held),onScoreboard:held=>calls.push('scoreboard'+held)});
+  const input=new sandbox.exports.GameInput(canvas,{onPause:()=>calls.push('pause'),onShoot:()=>calls.push('fire'),onReload:()=>calls.push('reload'),onJump:()=>calls.push('jump'),onSlot:n=>calls.push('slot'+n),onPrimaryCycle:()=>calls.push('cycle'),onInspect:()=>calls.push('inspect'),onAds:on=>calls.push('ads'+on),onShop:()=>calls.push('shop'),onInteract:held=>calls.push('interact'+held),onScoreboard:held=>calls.push('scoreboard'+held),onSpectatorCycle:direction=>calls.push('spectator'+direction)});
   const emit=(o,n,e={})=>{
     const event={defaultPrevented:false,preventDefault(){this.defaultPrevented=true},pointerType:'mouse',...e};
     o.listeners.get(n)?.(event);
@@ -20,6 +20,31 @@ function createInput() {
   };
   return {input,calls,emit,win,doc,canvas};
 }
+
+test('a result scoreboard stays open while the frame loop keeps gameplay disabled', () => {
+  const {input,emit,win}=createInput();
+  input.active=true;
+  input.touchTrigger(true);input.touchAds(true);input.touchMove(1,0);input.touchInteract(true);
+  input.active=false;
+  assert.equal(input.fireHeld,false);
+  assert.equal(input.adsHeld,false);
+  assert.equal(input.interactHeld,false);
+  assert.equal(input.moveX,0);
+  // The read-only result UI opens the scoreboard even though combat is disabled.
+  input.scoreboardHeld=true;
+  for(let frame=0;frame<60;frame++) input.active=false;
+  assert.equal(input.scoreboardHeld,true);
+  input.touchTrigger(true);input.touchMove(1,1);input.touchInteract(true);
+  assert.equal(input.fireHeld,false);
+  assert.equal(input.interactHeld,false);
+  assert.equal(input.moveX,0);
+  emit(win,'blur');
+  assert.equal(input.scoreboardHeld,false,'focus loss still releases the UI hold');
+  input.scoreboardHeld=true;input.active=true;input.active=false;
+  assert.equal(input.scoreboardHeld,false,'a genuine gameplay transition clears all input');
+  input.scoreboardHeld=true;input.dispose();
+  assert.equal(input.scoreboardHeld,false,'disposal still clears all input');
+});
 
 test('mouse, touch, ADS and keyboard paths share predictable input and fully release listeners', () => {
   const {input,calls,emit,win,doc,canvas}=createInput();
@@ -133,4 +158,17 @@ test('objective and scoreboard holds release on keyup, overlays, focus loss and 
   const callsAfterDispose=calls.length;
   input.touchInteract(true);input.touchScoreboard(true);
   assert.equal(calls.length,callsAfterDispose);
+});
+
+
+test('spectator Q/E cycle controls are independent of movement and ignore repeats while preserving cleanup', () => {
+  const {input,calls,emit,win}=createInput();
+  input.active=true;
+  emit(win,'keydown',{code:'KeyQ'});emit(win,'keydown',{code:'KeyQ',repeat:true});
+  emit(win,'keyup',{code:'KeyQ'});emit(win,'keydown',{code:'KeyE'});
+  assert.deepEqual(calls.filter(value=>value.startsWith('spectator')),['spectator-1','spectator1']);
+  input.update();assert.equal(input.moveX,0);assert.equal(input.moveY,0);
+  input.active=false;emit(win,'keydown',{code:'KeyE'});
+  assert.equal(calls.filter(value=>value==='spectator1').length,1);
+  input.dispose();
 });

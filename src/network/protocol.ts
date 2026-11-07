@@ -5,7 +5,11 @@ import type { WeaponAction, WeaponId } from '../game/weapons';
 export const NETWORK_VERSION = 1;
 export const ROOM_TYPE = 'burma_custom';
 export interface Point3 { x: number; y: number; z: number }
-export interface MatchConfiguration { mapId: 'bagan-old-city'; rounds: number; activeSite: 'both' | ObjectiveSiteId }
+export interface MatchConfiguration {
+  mapId: 'bagan-old-city'; rounds: number; activeSite: 'both' | ObjectiveSiteId;
+  /** Omitted by older saved lobby settings; the server defaults to false. */
+  friendlyFire?: boolean;
+}
 export interface OnlineInput {
   seq: number; moveX: number; moveY: number; yaw: number; pitch: number;
   sprint: boolean; ads: boolean; fire: boolean; jump: boolean;
@@ -20,9 +24,17 @@ export interface OnlinePlayer {
   alive: boolean; health: number; armor: number; kills: number; deaths: number;
   lastInput: number; deviceEquipped: boolean; inventory: OnlineInventory; economy: EconomySnapshot;
 }
+export interface OnlineRoundRecord {
+  id: string; round: number; winner: ObjectiveTeam; reason: string;
+  plantedSite: ObjectiveSiteId | null;
+  scores: { attackers: number; defenders: number };
+  /** Server wall-clock timestamp, recorded once when the result resolves. */
+  resolvedAt: number;
+}
 export interface OnlineSnapshot {
   version: typeof NETWORK_VERSION; code: string; hostId: string; serverTime: number;
   stage: 'lobby' | 'match' | 'finished'; config: MatchConfiguration;
+  matchId: string; roundHistory: OnlineRoundRecord[];
   players: OnlinePlayer[]; objective: ObjectiveSnapshot | null; message: string;
 }
 export type OnlineAction =
@@ -30,6 +42,7 @@ export type OnlineAction =
   | { type: 'team'; playerId: string; team: ObjectiveTeam }
   | { type: 'configure'; config: MatchConfiguration }
   | { type: 'start' } | { type: 'return-lobby' }
+  | { type: 'rematch'; matchId: string }
   | { type: 'equip'; slot: 1 | 2 | 3 | 4 }
   | { type: 'select-primary'; weaponId: 'rifle' | 'smg' | 'sniper' }
   | { type: 'reload' } | { type: 'inspect' }

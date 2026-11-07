@@ -1,10 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { ObjectiveSession } from '../../src/game/objectiveSession';
 import { PracticeEconomy } from '../../src/game/economy';
 import { WeaponInventory, WEAPONS } from '../../src/game/weapons';
 import { WorldCollision, rayPlayerHit, spawnFor, PLAYER_EYE_HEIGHT } from '../../src/shared/world';
 import type { Vec3 } from '../../src/shared/world';
-import type { ObjectiveRosterPlayer, ObjectiveTeam } from '../../src/game/objective';
-import type { MatchConfiguration, OnlineAction, OnlineInput, OnlinePlayer, ShotEvent } from '../../src/network/protocol';
+import type { ObjectivePlayerSnapshot, ObjectiveRosterPlayer, ObjectiveSnapshot, ObjectiveTeam } from '../../src/game/objective';
+import type { MatchConfiguration, OnlineAction, OnlineInput, OnlinePlayer, OnlineRoundRecord, ShotEvent } from '../../src/network/protocol';
 
 export interface CombatPlayer {
   id: string; name: string; team: ObjectiveTeam; position: Vec3; velocity: Vec3;
@@ -27,9 +28,11 @@ export class MatchSimulation {
   private objectiveStarts = new Map<string, number>();
   private resultAge = 0;
   private shots: ShotEvent[] = [];
+  private readonly history: OnlineRoundRecord[] = [];
+  private readonly transitionLives = new Map<string, ObjectivePlayerSnapshot>();
   finished = false;
 
-  constructor(roster: readonly ObjectiveRosterPlayer[], readonly config: MatchConfiguration, world?: WorldCollision) {
+  constructor(roster: readonly ObjectiveRosterPlayer[], readonly config: MatchConfiguration, world?: WorldCollision, readonly matchId = randomUUID()) {
     this.world = world ?? new WorldCollision();
     const count = {attackers:0,defenders:0};
     const authoritativeRoster = roster.map(player => ({...player,position:spawnFor(player.team,count[player.team]++)}));
@@ -41,7 +44,22 @@ export class MatchSimulation {
     });
     this.syncRound();
   }
-  get snapshot() { return this.session.snapshot; }
+  get snapshot(): ObjectiveSnapshot {
+    const snapshot=this.session.snapshot;
+    if(snapshot.phase!=='transition')return snapshot;
+    // The shared rule machine prepares its next roster during transition. Keep
+    // previous lives visible until the server actually enters the buy phase.
+    return {...snapshot,players:snapshot.players.map(player=>{
+      const previous=this.transitionLives.get(player.id);
+      return previous?{...player,alive:previous.alive&&player.connected,health:player.connected?previous.health:0,
+        position:{...previous.position}}:player;
+    })};
+  }
+  /** Defensive copies keep presentation and callers from changing prior results. */
+  get roundHistory(): OnlineRoundRecord[] {
+    this.recordResult();
+    return this.history.map(record => ({ ...record, scores: { ...record.scores } }));
+  }
   getEconomy(id: string) { return this.session.economyFor(id); }
   getInventory(id: string) { return this.session.inventoryFor(id); }
   input(id: string, input: OnlineInput): boolean {
@@ -65,6 +83,15 @@ export class MatchSimulation {
     this.clearInput(id);
     this.session.authority.disconnect(id,`disconnect:${this.snapshot.epoch}:${++this.commandSequence}`);
     this.session.sync();
+    const snapshot=this.session.snapshot;
+    if(snapshot.phase==='result'||snapshot.phase==='transition'){
+      // Presence can change after the result was recorded. Keep the projected
+      // life dead through transition instead of reviving its earlier cache.
+      const disconnected=snapshot.players.find(player=>player.id===id);
+      if(disconnected)this.transitionLives.set(id,{...disconnected,
+        position:point(this.players.get(id)?.position??disconnected.position)});
+    }
+    this.recordResult();
   }
   reconnect(id: string) { this.clearInput(id);const player=this.players.get(id);if(player)player.lastPacket=-Infinity;this.session.authority.reconnect(id); }
 
@@ -143,6 +170,7 @@ export class MatchSimulation {
     const step=Math.min(dt,.05);this.now+=step;
     this.syncRound();
     const before=this.snapshot;
+    this.recordResult();
     if(before.phase==='result'){
       this.resultAge+=step;
       if(before.round>=this.config.rounds){this.finished=true;return;}
@@ -156,7 +184,18 @@ export class MatchSimulation {
       for(const player of this.players.values())this.stepPlayer(player,step);
       this.session.advance(step);
     }
-    this.session.sync();this.syncRound();
+    this.session.sync();this.recordResult();this.syncRound();
+  }
+  private recordResult() {
+    const snapshot=this.snapshot;
+    if(!snapshot.result)return;
+    const id=`${this.matchId}:${snapshot.epoch}:${snapshot.result.id}`;
+    if(this.history.some(record=>record.id===id))return;
+    this.transitionLives.clear();
+    for(const player of snapshot.players)this.transitionLives.set(player.id,{...player,position:{...player.position}});
+    this.history.push({id,round:snapshot.round,winner:snapshot.result.winner,reason:snapshot.result.reason,
+      plantedSite:snapshot.plantedSite,scores:{...snapshot.scores},resolvedAt:Date.now()});
+    if(this.history.length>30)this.history.shift();
   }
   private syncRound() {
     const s=this.snapshot,key=`${s.epoch}:${s.round}`;
@@ -226,12 +265,12 @@ export class MatchSimulation {
     }
     let killed=false,damagedVictim:string|null=null;
     const id=++this.shotSequence;
-    if(victim&&victim.team!==player.team){
+    if(victim&&(victim.team!==player.team||this.config.friendlyFire===true)){
       const healthBefore=this.getEconomy(victim.id).snapshot.health;
       if(this.session.damage(victim.id,headshot?weapon.headDamage:weapon.damage,`shot:${this.snapshot.epoch}:${id}`,player.id)){
         damagedVictim=victim.id;
         killed=healthBefore>0&&!this.snapshot.players.find(p=>p.id===victim!.id)!.alive;
-        if(killed){player.kills++;victim.deaths++;this.clearInput(victim.id);}
+        if(killed){if(victim.team!==player.team)player.kills++;victim.deaths++;this.clearInput(victim.id);}
       }
     }
     this.shots.push({id,playerId:player.id,weaponId:weapon.id,from:origin,

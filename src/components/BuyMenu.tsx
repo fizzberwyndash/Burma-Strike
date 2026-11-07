@@ -55,7 +55,8 @@ export default function BuyMenu({ snapshot, onClose, onBuy, onSell, onEquip, onS
   const selectedEquipped = selected.weaponId ? snapshot?.equipped === selected.weaponId : snapshot?.armorType === selected.id && snapshot.armor > 0;
   const refundable = snapshot?.refundable.includes(selected.id) ?? false;
   const armorReceiptConflict = !!snapshot && !selected.weaponId && snapshot.refundable.some(id => id === 'light-armor' || id === 'heavy-armor') && !snapshot.refundable.includes(selected.id);
-  const canBuy = !!snapshot && snapshot.phase === 'buy' && !selectedOwned && !armorReceiptConflict && snapshot.credits >= selected.price;
+  const deadOnline = online && !!snapshot && snapshot.health <= 0;
+  const canBuy = !deadOnline && !!snapshot && snapshot.phase === 'buy' && !selectedOwned && !armorReceiptConflict && snapshot.credits >= selected.price;
   const visible = SHOP_ITEMS.filter(item => category === 'All' || item.category === category);
   const phaseLabel = snapshot ? snapshot.phase === 'buy' ? 'BUY PHASE' : snapshot.phase === 'live' ? 'ROUND LIVE' : 'ROUND COMPLETE' : 'FREE RANGE CATALOG';
 
@@ -98,8 +99,8 @@ export default function BuyMenu({ snapshot, onClose, onBuy, onSell, onEquip, onS
           <div className="shop-purchase">
             <div className="shop-price"><span>{t('REQUISITION COST')}</span><strong><Coins size={17} />{credits(selected.price)}</strong></div>
             {snapshot ? <>
-              <button className="shop-buy-button" disabled={!canBuy} onClick={() => onBuy(selected.id)}>{selectedOwned ? <Check size={17} /> : snapshot.phase !== 'buy' ? <LockKeyhole size={16} /> : <ShoppingBag size={16} />}<span>{snapshot.phase !== 'buy' ? t('BUY PHASE ONLY') : armorReceiptConflict ? t('REFUND CURRENT ARMOR FIRST') : selectedOwned ? t('ALREADY OWNED') : snapshot.credits < selected.price ? t('NEED {amount} MORE CREDITS', { amount: credits(selected.price - snapshot.credits) }) : t('PURCHASE & EQUIP')}</span>{canBuy && <ArrowRight size={17} />}</button>
-              <div className="shop-item-actions"><button disabled={!refundable || snapshot.phase !== 'buy'} onClick={() => onSell(selected.id)}><RotateCcw size={13} />{refundable ? t('REFUND {amount}', { amount: credits(selected.price) }) : t('NO REFUND AVAILABLE')}</button>{selected.weaponId && snapshot.ownedWeapons.includes(selected.weaponId) && <button disabled={selectedEquipped} onClick={() => onEquip(selected.weaponId!)}><Crosshair size={13} />{t(selectedEquipped ? 'EQUIPPED' : 'EQUIP OWNED')}</button>}</div>
+              <button className="shop-buy-button" disabled={!canBuy} onClick={() => onBuy(selected.id)}>{selectedOwned ? <Check size={17} /> : snapshot.phase !== 'buy' ? <LockKeyhole size={16} /> : <ShoppingBag size={16} />}<span>{deadOnline ? t('WAIT FOR NEXT ROUND') : snapshot.phase !== 'buy' ? t('BUY PHASE ONLY') : armorReceiptConflict ? t('REFUND CURRENT ARMOR FIRST') : selectedOwned ? t('ALREADY OWNED') : snapshot.credits < selected.price ? t('NEED {amount} MORE CREDITS', { amount: credits(selected.price - snapshot.credits) }) : t('PURCHASE & EQUIP')}</span>{canBuy && <ArrowRight size={17} />}</button>
+              <div className="shop-item-actions"><button disabled={deadOnline || !refundable || snapshot.phase !== 'buy'} onClick={() => onSell(selected.id)}><RotateCcw size={13} />{refundable ? t('REFUND {amount}', { amount: credits(selected.price) }) : t('NO REFUND AVAILABLE')}</button>{selected.weaponId && snapshot.ownedWeapons.includes(selected.weaponId) && <button disabled={deadOnline || selectedEquipped} onClick={() => onEquip(selected.weaponId!)}><Crosshair size={13} />{t(selectedEquipped ? 'EQUIPPED' : 'EQUIP OWNED')}</button>}</div>
               <small className="shop-refund-note">{t('Full refunds apply only to purchases made in this buy phase. Starting the round locks them.')}</small>
             </> : <button className="shop-buy-button" onClick={onStartDrill}><ShoppingBag size={16} /><span>{t('START ECONOMY DRILL')}</span><ArrowRight size={17} /></button>}
           </div>

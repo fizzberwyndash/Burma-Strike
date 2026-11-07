@@ -215,7 +215,10 @@ export class OnlineClient implements OnlineGameBridge {
   dispose(): void {
     if (this.disposed) return;
     if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.pageHide);
-    void this.leave();
+    // A probe mount (React StrictMode) has not joined a room. Disposing it must
+    // not erase the reserved seat read by the real mount after a browser reload.
+    if (this.room) void this.leave();
+    else ++this.generation;
     this.disposed = true;
     this.listeners.clear(); this.shots.clear();
   }

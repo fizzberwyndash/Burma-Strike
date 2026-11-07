@@ -12,9 +12,11 @@ export function validateUsername(value: unknown): string {
   return name;
 }
 export function validateConfiguration(value: unknown): MatchConfiguration | null {
-  if (!record(value) || !keys(value, ['mapId', 'rounds', 'activeSite']) || value.mapId !== 'bagan-old-city' ||
-      !Number.isInteger(value.rounds) || !finite(value.rounds, 1, 30) || !['both','A','B'].includes(value.activeSite as string)) return null;
-  return { mapId: 'bagan-old-city', rounds: value.rounds, activeSite: value.activeSite as MatchConfiguration['activeSite'] };
+  if (!record(value) || !keys(value, ['mapId', 'rounds', 'activeSite','friendlyFire']) || value.mapId !== 'bagan-old-city' ||
+      !Number.isInteger(value.rounds) || !finite(value.rounds, 1, 30) || !['both','A','B'].includes(value.activeSite as string) ||
+      (value.friendlyFire!==undefined&&typeof value.friendlyFire!=='boolean')) return null;
+  return { mapId: 'bagan-old-city', rounds: value.rounds, activeSite: value.activeSite as MatchConfiguration['activeSite'],
+    ...(value.friendlyFire===undefined?{}:{friendlyFire:value.friendlyFire}) };
 }
 export function validateInput(value: unknown): OnlineInput | null {
   if (!record(value) || !keys(value, ['seq','moveX','moveY','yaw','pitch','sprint','ads','fire','jump']) ||
@@ -34,6 +36,8 @@ export function validateAction(value: unknown): OnlineAction | null {
       ? {type:'team',playerId:value.playerId,team:value.team as 'attackers'|'defenders'} : null;
     case 'configure': { const config = validateConfiguration(value.config); return keys(value,['type','config']) && config ? {type:'configure',config} : null; }
     case 'start': case 'return-lobby': case 'reload': case 'inspect': return keys(value,['type']) ? {type:value.type} : null;
+    case 'rematch': return keys(value,['type','matchId'])&&typeof value.matchId==='string'&&value.matchId.length>=1&&value.matchId.length<=128
+      ? {type:'rematch',matchId:value.matchId} : null;
     case 'equip': return keys(value,['type','slot']) && [1,2,3,4].includes(value.slot as number) ? {type:'equip',slot:value.slot as 1|2|3|4} : null;
     case 'select-primary': return keys(value,['type','weaponId']) && ['rifle','smg','sniper'].includes(value.weaponId as string)
       ? {type:'select-primary',weaponId:value.weaponId as 'rifle'|'smg'|'sniper'} : null;

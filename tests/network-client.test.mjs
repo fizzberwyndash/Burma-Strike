@@ -201,3 +201,21 @@ test('network failures have a useful message and lost sockets still clean up on 
   assert.equal(lost.removed, 1);
   client.dispose(); assert.equal(documentEvents.size, 0);
 });
+
+test('disposing an unused StrictMode mount preserves the saved seat for the real reload mount', async () => {
+  const saved = {endpoint:'ws://localhost:2567',token:'room:reload-seat',savedAt:Date.now()};
+  storage.set('burma-strike-reconnect-v1',JSON.stringify(saved));
+  const probe = new OnlineClient();
+  assert.equal(probe.getState().reconnectAvailable,true);
+  probe.dispose();
+  assert.equal(documentEvents.size,0);
+  const real = new OnlineClient();
+  assert.equal(real.getState().reconnectAvailable,true);
+  const restored = room(); api.next.push(restored);
+  await real.reconnect();
+  assert.deepEqual(api.calls.at(-1).args,['room:reload-seat']);
+  assert.equal(real.sessionId,restored.sessionId);
+  await real.leave();
+  assert.equal(storage.size,0,'an explicit leave still abandons the reserved seat');
+  real.dispose();
+});
